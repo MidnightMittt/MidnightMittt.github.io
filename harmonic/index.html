@@ -84,7 +84,7 @@ canvas{display:block}
 <div class="hd"><h1>HARMONIC // LP</h1><span class="stamp" id="stamp">&#9676; linking&hellip;</span></div>
 
 <div class="panel">
- <p class="ttl">&#9656; <b>position</b> // 5.5% pool &middot; -40 / +100</p>
+ <p class="ttl">&#9656; <b>position</b> // 5.5% pool &middot; <span id="bandttl">-40 / +100</span></p>
  <div class="hero" id="val">&mdash;</div>
  <div class="heroSub" id="valsub">&nbsp;</div>
  <canvas id="gauge" style="width:100%;height:86px;margin-top:10px"></canvas>
@@ -130,6 +130,7 @@ canvas{display:block}
 <script>
 var RPC="https://rpc.mainnet.chain.robinhood.com";
 var PM="0x8366a39cc670b4001a1121b8f6a443a643e40951";
+var LASTRESET=0;
 var tL=328350,tU=341000,ST0=true,BANKED=1.36,COMP=11.54,REALIZED=0,PRIOR=0,EPOCH=new Date("2026-10-30T21:09:00Z").getTime();
 var PID="0xbc78661e496e1885da488bd55fed5b577ef240c334b17234608b5c00e3a9e56c", SYM="HARMONIC", FEERATE=0.055;
 var S={"slot0":"0x4a63323e6be60e93e41284ea612eac09f952b15cc45b23502189c128d2387439","posL":"0x22eb4cec89413b1b48ca7160b9e7dce47ad53ab6afd79a20ad34fc0c75fa52a4","fg0":"0x4a63323e6be60e93e41284ea612eac09f952b15cc45b23502189c128d238743a","fg1":"0x4a63323e6be60e93e41284ea612eac09f952b15cc45b23502189c128d238743b","pf0":"0x22eb4cec89413b1b48ca7160b9e7dce47ad53ab6afd79a20ad34fc0c75fa52a5","pf1":"0x22eb4cec89413b1b48ca7160b9e7dce47ad53ab6afd79a20ad34fc0c75fa52a6","lo0":"0xec1a3d2c0183fd272afd5e58b3098b6616a6f64a5139a555c029eacef3c5827b","lo1":"0xec1a3d2c0183fd272afd5e58b3098b6616a6f64a5139a555c029eacef3c5827c","hi0":"0x90894d9dcf4ea4082bee36a61e61696a135338e9c1554f3b43d57debe2ddb51a","hi1":"0x90894d9dcf4ea4082bee36a61e61696a135338e9c1554f3b43d57debe2ddb51b"}, LIQ="0x4a63323e6be60e93e41284ea612eac09f952b15cc45b23502189c128d238743c";
@@ -482,10 +483,34 @@ function tick(){
    unc=ST0?(f0/1e6+f1v/1e18*px):(f1v/1e6+f0/1e18*px);
    if(!(unc>=0&&unc<1e5))unc=0;
   }catch(e){}
-  var days=(Date.now()-EPOCH)/86400000;
+  // ---- MEASURED, DYNAMIC FEE RATE -------------------------------------
+  // Fee flow changes constantly, so this cannot be a build-time constant.
+  // Two sources are POOLED:
+  //   1. FEERATE, computed at build time by walking lp-journal.jsonl and
+  //      summing only POSITIVE feesTotal deltas (a drop means the on-chain
+  //      counter was reset by a compound/collect, not negative income).
+  //   2. Live samples this page takes itself: every tick it diffs the
+  //      uncollected counter against the previous tick and accumulates.
+  // Pooling them means the number is accurate from the first paint (it starts
+  // with hours of real history) AND keeps updating while the tab is open.
+  // Anything that resets the counter just contributes no sample that tick.
+  if(!window.__rate) window.__rate={fee:0,hrs:0,lastUnc:null,lastT:null};
+  var RT=window.__rate, nowT=Date.now();
+  if(RT.lastT!==null){
+   var dh=(nowT-RT.lastT)/36e5, du=unc-RT.lastUnc;
+   if(dh>0.0005&&dh<2&&du>=0&&du<1e4){ RT.fee+=du; RT.hrs+=dh; }
+  }
+  RT.lastUnc=unc; RT.lastT=nowT;
+  var bakedFee=0, bakedHrs=0;
+  if(typeof FEERATE!=="undefined"&&FEERATE&&FEERATE.windowH>0){
+   bakedHrs=FEERATE.windowH; bakedFee=FEERATE.usdPerDay/24*FEERATE.windowH;
+  }
+  var totFee=bakedFee+RT.fee, totHrs=bakedHrs+RT.hrs;
+  var days=totHrs/24;
   // FEE ENGINE hero — measured accrual, not the pool model.
   var lifetime=BANKED+COMP+unc;
-  var pace=days>0.05?(unc/days):null;
+  // need a real sample before annualising: 6h of pooled history minimum
+  var pace=(totHrs>=6&&totFee>0)?(totFee/totHrs*24):null;
   drawRealized(pace,val,lifetime,unc);
   drawVol((pace!==null&&val>0)?pace*365/val*100:NaN);
   // four tiles: the things that decide hold / re-range / exit
@@ -568,7 +593,40 @@ function drawHistory(){
  spark("volspark","volnote",VH,"pool volume/day","rgb(34,211,238)");
  bars("feebars","feenote",FH,"fees/day");
 }
-tick();lastTrade();loadTape();drawVsHold();
+/* RUNTIME CONFIG. Band ticks and storage slots used to be compiled in, so a
+   re-range made every published page wrong until it was rebuilt AND
+   redeployed — on 2026-11-01 that left the HOOKR page reading $0.00 from a
+   band we had already closed, with no way to publish for 24h. Now the page
+   fetches /lp-config.json on load and overrides itself. The baked values
+   above remain the fallback, so the page still works if the fetch fails. */
+function __boot(){ tick();lastTrade();loadTape();drawVsHold(); }
+(function(){
+ var done=false, go=function(){ if(done)return; done=true; __boot(); };
+ try{
+  fetch("/lp-config.json",{cache:"no-store"}).then(function(r){return r.json()}).then(function(J){
+   var C=J&&J[SYM]; if(!C) return;
+   if(typeof C.tL==="number") tL=C.tL;
+   if(typeof C.tU==="number") tU=C.tU;
+   if(typeof C.stable0==="boolean") ST0=C.stable0;
+   if(typeof C.loPx==="number") BLO=C.loPx;
+   if(typeof C.hiPx==="number") BHI=C.hiPx;
+   if(typeof C.banked==="number")   BANKED=C.banked;
+   if(typeof C.comp==="number")     COMP=C.comp;
+   if(typeof C.realized==="number") REALIZED=C.realized;
+   if(typeof C.prior==="number")    PRIOR=C.prior;
+   if(typeof C.lastReset==="number") LASTRESET=C.lastReset;
+   if(C.pid) PID=C.pid;
+   if(C.slots){
+    S={slot0:C.slots.slot0,posL:C.slots.posL,fg0:C.slots.fg0,fg1:C.slots.fg1,
+       pf0:C.slots.pf0,pf1:C.slots.pf1,lo0:C.slots.lo0,lo1:C.slots.lo1,
+       hi0:C.slots.hi0,hi1:C.slots.hi1};
+    if(C.slots.liq) LIQ=C.slots.liq;
+   }
+   if(C.band){ var bt=$("bandttl"); if(bt) bt.textContent=C.band; CURBAND=String(C.band).replace(/ /g,""); }
+  }).catch(function(){}).then(go,go);
+  setTimeout(go,4000);          // never let a hung fetch block the page
+ }catch(e){ go(); }
+})();
 setInterval(tick,12000);setInterval(lastTrade,120000);setInterval(loadTape,90000);
 window.addEventListener("resize",function(){tick();drawBook();drawVsHold()});
 document.addEventListener("visibilitychange",function(){if(!document.hidden){tick();lastTrade();loadTape();drawVsHold();}});
