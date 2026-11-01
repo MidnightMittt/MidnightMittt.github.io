@@ -1,0 +1,221 @@
+<title>Send USDG to the Safe</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!--
+  ONE JOB: move the USDG sitting in his MetaMask into the Safe, on mobile,
+  without him typing an address.
+
+  ── WHY A DEEP LINK AND NOT A CONNECT BUTTON ──
+  Every page I have built for him that calls window.ethereum has FAILED on his
+  phone, because injected providers only exist inside MetaMask's own in-app
+  browser -- in Safari there is no window.ethereum at all and the button does
+  nothing. relay.link worked precisely because it ships WalletConnect. Rather
+  than take on a wallet-connect dependency for a single ERC20 transfer, this
+  page builds a metamask.app.link deep link: tapping it opens the MetaMask app
+  with the token, chain, recipient and amount ALREADY FILLED IN, and he just
+  confirms. No connection handshake, no library, works from any browser.
+
+  ── THE INJECTED PATH STILL EXISTS ──
+  If he does happen to open this inside MetaMask's browser, window.ethereum is
+  there and the direct button is shown too. Both routes are offered rather than
+  guessing which one he is on.
+
+  ── EVERY NUMBER IS READ LIVE ──
+  The amount is not hardcoded. It is his actual USDG balance read from chain at
+  load, so the link always moves the full amount even if it changed. A
+  hardcoded figure would silently under-send after any further deposit.
+
+  ── WHAT THIS PAGE CANNOT DO ──
+  It holds no key and signs nothing. Every path ends in MetaMask asking HIM to
+  confirm. That is the point: I never sign a transfer out of his wallet.
+-->
+<style>
+:root{--bg:#f4f6f7;--panel:#fff;--ink:#15191d;--dim:#5d6873;--faint:#6d777f;
+ --line:#d7dde1;--accent:#0f6b5c;--accent-ink:#fff;--bad:#b32d2d;--warn:#9a6700;
+ --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+ --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+ --bg:#0f1317;--panel:#171c21;--ink:#e9edf0;--dim:#97a1aa;--faint:#8b949e;
+ --line:#2a3138;--accent:#4ec3a8;--accent-ink:#06120f;--bad:#f07070;--warn:#e0b64b}}
+:root[data-theme="dark"]{--bg:#0f1317;--panel:#171c21;--ink:#e9edf0;--dim:#97a1aa;
+ --faint:#8b949e;--line:#2a3138;--accent:#4ec3a8;--accent-ink:#06120f;--bad:#f07070;--warn:#e0b64b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+ font-size:16px;line-height:1.5;-webkit-text-size-adjust:100%}
+.wrap{max-width:520px;margin:0 auto;padding:20px 16px 64px;display:flex;flex-direction:column;gap:16px}
+h1{font-size:21px;margin:0 0 2px;letter-spacing:-.2px}
+.sub{color:var(--faint);font-size:13px;font-family:var(--mono)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+.amt{font-family:var(--mono);font-size:40px;font-variant-numeric:tabular-nums;
+ line-height:1.1;margin:4px 0 0;word-break:break-all}
+.lbl{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);
+ font-weight:600;margin:0 0 6px}
+.btn{display:block;width:100%;text-align:center;padding:17px 16px;border-radius:11px;
+ font-size:17px;font-weight:650;text-decoration:none;border:1px solid var(--accent);
+ background:var(--accent);color:var(--accent-ink);margin-top:4px;cursor:pointer;
+ font-family:inherit;-webkit-appearance:none}
+.btn.sec{background:transparent;color:var(--accent)}
+.btn[disabled]{opacity:.45;pointer-events:none}
+.addr{font-family:var(--mono);font-size:13px;word-break:break-all;background:var(--bg);
+ border:1px solid var(--line);border-radius:8px;padding:11px;margin:6px 0 0;
+ -webkit-user-select:all;user-select:all}
+.row{display:flex;justify-content:space-between;gap:12px;padding:7px 0;
+ border-bottom:1px solid var(--line);font-size:14px}
+.row:last-child{border-bottom:0}
+.row span:last-child{font-family:var(--mono);text-align:right;word-break:break-all}
+.note{font-size:13px;color:var(--dim);margin:10px 0 0}
+.err{color:var(--bad);font-size:14px;margin-top:10px;display:none}
+ol{margin:8px 0 0;padding-left:20px;font-size:14px;color:var(--dim)}
+li{margin:6px 0}
+code{font-family:var(--mono);font-size:12.5px}
+.ok{color:var(--accent);font-weight:650}
+</style>
+
+<div class="wrap">
+<div>
+  <h1>Send USDG to the Safe</h1>
+  <div class="sub" id="stamp">reading the chain…</div>
+</div>
+
+<div class="card">
+  <p class="lbl">In your MetaMask, ready to move</p>
+  <div class="amt" id="amt">—</div>
+  <div class="sub" id="amtsub">Robinhood Chain · USDG</div>
+  <a class="btn" id="deep" href="#" rel="noopener">Open in MetaMask &amp; confirm</a>
+  <button class="btn sec" id="inj" style="display:none">Send with the connected wallet</button>
+  <p class="note" id="deepnote">Opens MetaMask with the recipient and amount already filled in.
+  You only press Confirm. Nothing is signed by this page.</p>
+  <div class="err" id="err"></div>
+</div>
+
+<div class="card">
+  <p class="lbl">Going to — your Safe</p>
+  <div class="addr" id="safe">0x4F91BeABF6d64648141032A47Efa662Ed852888c</div>
+  <button class="btn sec" id="copy" style="margin-top:10px">Copy the Safe address</button>
+  <p class="note">Check this matches what MetaMask shows before you confirm. It is a
+  plain token transfer, so the address <em>is</em> in the transaction and your wallet
+  will display it.</p>
+</div>
+
+<div class="card">
+  <p class="lbl">What you are signing</p>
+  <div class="row"><span>token</span><span>USDG · Global Dollar</span></div>
+  <div class="row"><span>contract</span><span id="tok">0x5fc5…d168</span></div>
+  <div class="row"><span>network</span><span>Robinhood Chain · 4663</span></div>
+  <div class="row"><span>from</span><span id="from">0xdB48…f4FD</span></div>
+  <div class="row"><span>to</span><span>0x4F91…888c (Safe)</span></div>
+  <div class="row"><span>amount</span><span id="rawamt">—</span></div>
+</div>
+
+<div class="card">
+  <p class="lbl">If the button does nothing</p>
+  <ol>
+    <li>Open <b>MetaMask</b> directly and pick <b>Robinhood Chain</b>.</li>
+    <li>Tap <b>USDG</b> &rarr; <b>Send</b>.</li>
+    <li>Paste the Safe address (button above copies it).</li>
+    <li>Enter <b id="manual">the amount</b> and confirm.</li>
+  </ol>
+  <p class="note">You need a little ETH on Robinhood Chain for gas — about a cent.
+  Your balance: <span id="gas">—</span></p>
+</div>
+</div>
+
+<script>
+var RPC="https://rpc.mainnet.chain.robinhood.com";
+var USDG="0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
+var EOA="0xdB48906603515A434b567c88EC5ae83C1f9cf4FD";
+var SAFE="0x4F91BeABF6d64648141032A47Efa662Ed852888c";
+var CHAIN=4663;
+var $=function(id){return document.getElementById(id)};
+
+function rpc(method,params){
+  return fetch(RPC,{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({jsonrpc:"2.0",id:1,method:method,params:params})})
+    .then(function(r){return r.json()}).then(function(j){
+      if(j.error) throw new Error(j.error.message||"rpc error");
+      return j.result;});
+}
+function pad(h){h=h.replace(/^0x/,"");while(h.length<64)h="0"+h;return h}
+/* 6-dp formatting done on the RAW integer string, never via Number().
+   USDG has 6 decimals and a float round-trip can shave the last unit, which
+   would leave dust behind and make the "send everything" button a lie. */
+function fmt6(raw){
+  var s=raw.toString();
+  while(s.length<7) s="0"+s;
+  var w=s.slice(0,-6), f=s.slice(-6).replace(/0+$/,"");
+  return f? w+"."+f : w;
+}
+
+var BAL=null;
+
+function build(){
+  // metamask.app.link deep link: token@chain/transfer?address=..&uint256=..
+  var link="https://metamask.app.link/send/"+USDG+"@"+CHAIN
+          +"/transfer?address="+SAFE+"&uint256="+BAL.toString();
+  $("deep").setAttribute("href",link);
+  $("deep").removeAttribute("disabled");
+}
+
+function load(){
+  var data="0x70a08231"+pad(EOA.toLowerCase());
+  rpc("eth_call",[{to:USDG,data:data},"latest"]).then(function(hex){
+    BAL=BigInt(hex);
+    if(BAL===0n){
+      $("amt").textContent="0 USDG";
+      $("amtsub").textContent="nothing in your wallet to send";
+      $("deep").setAttribute("disabled","");
+      $("deepnote").textContent="Your MetaMask holds no USDG on Robinhood Chain. "
+        +"If you just withdrew, give it a minute and reload.";
+      return;
+    }
+    var pretty=fmt6(BAL);
+    $("amt").textContent=pretty+" USDG";
+    $("rawamt").textContent=BAL.toString()+"  (6 dp)";
+    $("manual").textContent=pretty;
+    build();
+    $("stamp").textContent="balance read "+new Date().toLocaleTimeString();
+  }).catch(function(e){
+    $("err").style.display="block";
+    $("err").textContent="Could not read the chain: "+(e.message||e)
+      +" — the manual steps at the bottom still work.";
+  });
+  rpc("eth_getBalance",[EOA,"latest"]).then(function(h){
+    var wei=BigInt(h), eth=Number(wei)/1e18;
+    $("gas").textContent=eth.toFixed(6)+" ETH";
+    if(eth<0.0000005) $("gas").textContent+="  — that may be too little for gas";
+  }).catch(function(){ $("gas").textContent="unreadable"; });
+  $("tok").textContent=USDG;
+  $("from").textContent=EOA;
+}
+
+$("copy").addEventListener("click",function(){
+  var t=SAFE, b=$("copy");
+  function done(){ b.textContent="Copied ✓"; setTimeout(function(){b.textContent="Copy the Safe address"},1800); }
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(done,function(){prompt("Copy the address:",t)});
+  } else { prompt("Copy the address:",t); }
+});
+
+/* Injected path, only if we are actually inside a wallet browser. */
+if(typeof window!=="undefined" && window.ethereum){
+  $("inj").style.display="block";
+  $("inj").addEventListener("click",function(){
+    var b=$("inj"); b.textContent="Check your wallet…";
+    window.ethereum.request({method:"eth_requestAccounts"}).then(function(accts){
+      var from=accts&&accts[0];
+      if(!from) throw new Error("no account");
+      var data="0xa9059cbb"+pad(SAFE.toLowerCase())+pad(BAL.toString(16));
+      return window.ethereum.request({method:"eth_sendTransaction",
+        params:[{from:from,to:USDG,data:data}]});
+    }).then(function(tx){
+      b.textContent="Sent ✓";
+      $("deepnote").textContent="Sent: "+tx;
+    }).catch(function(e){
+      b.textContent="Send with the connected wallet";
+      $("err").style.display="block";
+      $("err").textContent=(e&&e.message)||"wallet refused";
+    });
+  });
+}
+
+load();
+</script>

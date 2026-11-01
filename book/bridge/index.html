@@ -1,0 +1,416 @@
+<title>USDC to USDG</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!--
+  BRIDGE USDC (Ethereum, his EOA) -> USDG (Robinhood Chain, the Safe).
+  Built 2026-10-14 after he swapped half of SEND into 66.77 USDC and asked for
+  a link to move it into the Safe.
+
+  ── WHY TWO HOPS AND NOT ONE ──
+  Relay CAN deliver straight to the Safe: a quote with recipient=0x4F91... was
+  accepted and priced identically (66.673608 USDG out vs 66.673936 to self).
+  It is NOT used, because the deposit calldata is
+      [depositor EOA, USDC, amount, opaque 32-byte intent id]
+  and the recipient appears NOWHERE in it — it is bound off-chain to the intent
+  id. So a custom recipient is a destination he cannot see in MetaMask and
+  cannot check. Bridging to HIS OWN address is the default binding (sender ==
+  recipient, nothing custom to get wrong), and the final hop is then a plain
+  ERC20 transfer whose recipient IS in the calldata and IS shown by the wallet.
+  Same cost, one verifiable step instead of one blind one.
+
+  ── THE QUOTE IS FETCHED LIVE ──
+  Relay quotes expire and the USDC balance can change. Nothing about amounts is
+  baked into this file; it reads the balance on chain and quotes at open time.
+  A stale baked-in quote is how a page like this lies.
+-->
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#ffffff; --line:#d9dde4; --ink:#171b22; --dim:#5e6774;
+  --accent:#b45309; --accent-ink:#ffffff;
+  --ok:#157f4b; --bad:#b4242b; --wait:#8a6d1f;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#13161b; --panel:#1b1f26; --line:#2d333d; --ink:#e8ebef; --dim:#99a2af;
+    --accent:#e0932f; --accent-ink:#1b1200;
+    --ok:#4cc585; --bad:#ef6b70; --wait:#d9b968;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#13161b; --panel:#1b1f26; --line:#2d333d; --ink:#e8ebef; --dim:#99a2af;
+  --accent:#e0932f; --accent-ink:#1b1200;
+  --ok:#4cc585; --bad:#ef6b70; --wait:#d9b968;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+  font-size:16px;line-height:1.5;-webkit-text-size-adjust:100%}
+.wrap{max-width:620px;margin:0 auto;padding:20px 16px 72px}
+h1{font-size:1.35rem;line-height:1.25;margin:0 0 2px;letter-spacing:-.01em;text-wrap:balance}
+.sub{color:var(--dim);font-size:.9rem;margin:0 0 20px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:14px 15px;margin:0 0 12px}
+.card h2{font-size:.72rem;text-transform:uppercase;letter-spacing:.09em;
+  color:var(--dim);margin:0 0 10px;font-weight:600;display:flex;gap:8px;align-items:baseline}
+.n{display:inline-flex;width:19px;height:19px;border-radius:50%;background:var(--line);
+  color:var(--ink);align-items:center;justify-content:center;font-size:.68rem;
+  letter-spacing:0;flex:none}
+.card.done .n{background:var(--ok);color:#fff}
+.card.active{border-color:var(--accent)}
+.card.active .n{background:var(--accent);color:var(--accent-ink)}
+.row{display:flex;justify-content:space-between;gap:12px;padding:5px 0;
+  border-bottom:1px solid var(--line);font-size:.92rem}
+.row:last-child{border-bottom:0}
+.row span:first-child{color:var(--dim)}
+.row span:last-child{font-family:var(--mono);text-align:right;
+  font-variant-numeric:tabular-nums;word-break:break-all}
+.addr{font-family:var(--mono);font-size:.78rem;word-break:break-all;line-height:1.45;
+  background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 8px;margin:6px 0 0}
+button{font-family:var(--sans);font-size:.98rem;font-weight:600;width:100%;
+  padding:12px 14px;border-radius:8px;border:1px solid var(--accent);
+  background:var(--accent);color:var(--accent-ink);cursor:pointer;margin-top:10px}
+button.ghost{background:transparent;color:var(--ink);border-color:var(--line);font-weight:500}
+button:disabled{opacity:.42;cursor:default}
+button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.msg{font-size:.86rem;margin-top:9px;padding:8px 10px;border-radius:6px;
+  border:1px solid var(--line);background:var(--bg);white-space:pre-wrap;word-break:break-word}
+.msg.ok{border-color:var(--ok);color:var(--ok)}
+.msg.bad{border-color:var(--bad);color:var(--bad)}
+.msg.wait{border-color:var(--wait);color:var(--wait)}
+.note{font-size:.82rem;color:var(--dim);margin-top:9px}
+.hide{display:none}
+a{color:var(--accent)}
+code{font-family:var(--mono);font-size:.85em}
+.big{font-family:var(--mono);font-size:1.5rem;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+</style>
+
+<div class="wrap">
+<h1>Turn USDC into USDG</h1>
+<p class="sub">Your USDC sits on Ethereum. USDG only exists on Robinhood Chain, so converting
+ means crossing chains — that is what this page does, in two verifiable hops. It ends with
+ the USDG in the Safe, ready for the LP.</p>
+
+<div class="card" id="c1">
+  <h2><span class="n">1</span> Wallet</h2>
+  <div id="w-state" class="msg wait">Looking for MetaMask…</div>
+  <button id="b-connect">Connect wallet</button>
+  <div id="w-info" class="hide">
+    <div class="row"><span>account</span><span id="w-acct"></span></div>
+    <div class="row"><span>network</span><span id="w-chain"></span></div>
+  </div>
+</div>
+
+<div class="card hide" id="c2">
+  <h2><span class="n">2</span> How much USDG you get</h2>
+  <div class="row"><span>USDC on Ethereum</span><span id="q-bal">—</span></div>
+  <div class="row"><span>you receive</span><span id="q-out">—</span></div>
+  <div class="row"><span>total friction</span><span id="q-fee">—</span></div>
+  <div class="row"><span>delivered to</span><span id="q-to">—</span></div>
+  <div id="q-msg" class="msg wait">Fetching a live quote…</div>
+  <button id="b-quote" class="ghost">Refresh quote</button>
+  <p class="note">Quotes expire. If a step fails as stale, refresh and redo it.</p>
+</div>
+
+<div class="card hide" id="c3">
+  <h2><span class="n">3</span> Approve USDC</h2>
+  <p class="note" style="margin-top:0">Lets Relay's depository pull exactly this amount. Skipped automatically if you already have the allowance.</p>
+  <button id="b-approve" disabled>Approve</button>
+  <div id="a-msg" class="msg hide"></div>
+</div>
+
+<div class="card hide" id="c4">
+  <h2><span class="n">4</span> Convert USDC &rarr; USDG</h2>
+  <p class="note" style="margin-top:0"><strong>MetaMask will not show a destination address on this one.</strong> Relay binds it off-chain to the intent id. That is why this sends to your own wallet and nowhere else — the Safe hop is step 5, where you can read the address.</p>
+  <button id="b-bridge" disabled>Convert to USDG in my wallet</button>
+  <div id="b-msg" class="msg hide"></div>
+</div>
+
+<div class="card hide" id="c5">
+  <h2><span class="n">5</span> Send USDG to the Safe</h2>
+  <div class="row"><span>USDG in your wallet</span><span id="s-bal">—</span></div>
+  <p class="note" style="margin-bottom:0">Check this address matches what MetaMask shows you:</p>
+  <div class="addr" id="s-safe"></div>
+  <button id="b-switch" class="ghost">Switch to Robinhood Chain</button>
+  <button id="b-send" disabled>Send all USDG to the Safe</button>
+  <div id="s-msg" class="msg hide"></div>
+</div>
+
+<div class="card hide" id="c6">
+  <h2><span class="n">6</span> Done</h2>
+  <div class="row"><span>Safe USDG balance</span><span class="big" id="d-bal">—</span></div>
+  <div id="d-msg" class="msg ok"></div>
+</div>
+
+<p class="note">Nothing here can move funds out of the Safe. This page only sends <em>into</em> it.</p>
+</div>
+
+<script>
+"use strict";
+const USDC  = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+const USDG  = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
+const SAFE  = "0x4F91BeABF6d64648141032A47Efa662Ed852888c";
+const RH_ID = 4663, RH_HEX = "0x1237", ETH_HEX = "0x1";
+const RH_RPC = "https://rpc.mainnet.chain.robinhood.com";
+const REL = "https://api.relay.link";
+
+const $ = id => document.getElementById(id);
+const show = (id,on=true) => $(id).classList.toggle("hide",!on);
+const setMsg = (id,text,cls="") => { const e=$(id); e.textContent=text;
+  e.className = "msg" + (cls?" "+cls:""); show(id,true); };
+const grp = a => a.slice(0,2)+" "+(a.slice(2).match(/.{1,4}/g)||[]).join(" ");
+const u6 = n => (Number(n)/1e6).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:6});
+const pad = (h) => h.replace(/^0x/,"").toLowerCase().padStart(64,"0");
+const encAddr = a => pad(a);
+const encUint = v => pad(BigInt(v).toString(16));
+
+let eth=null, acct=null, chain=null, quote=null, needApprove=true;
+
+/* ── wallet discovery ──────────────────────────────────────────────
+   A single window.ethereum read on load LOSES THE RACE in the MetaMask
+   in-app browser — that bug already cost him one dead link. Four signals:
+   immediate read, the initialized event, EIP-6963 announcement, and a poll
+   that also re-fires when the tab regains focus. */
+/* The Connect button is ALWAYS shown. Detection only sharpens the message.
+   The first version revealed the button on successful detection, so a failed
+   or slow injection left the page with no control at all and every later step
+   hidden behind it -- the user had nothing to tap and nothing to read. */
+function pickProvider(p){
+  if (eth || !p) return;
+  eth = p;
+  setMsg("w-state","Wallet found. Tap Connect.","");
+  eth.on && eth.on("accountsChanged",()=>location.reload());
+  eth.on && eth.on("chainChanged",()=>location.reload());
+}
+window.addEventListener("eip6963:announceProvider", e => pickProvider(e.detail && e.detail.provider));
+window.dispatchEvent(new Event("eip6963:requestProvider"));
+window.addEventListener("ethereum#initialized", ()=>pickProvider(window.ethereum));
+document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) pickProvider(window.ethereum); });
+pickProvider(window.ethereum);
+let tries=0;
+const hunt = setInterval(()=>{
+  pickProvider(window.ethereum);
+  if (eth || ++tries>30){
+    clearInterval(hunt);
+    if(!eth) setMsg("w-state","No wallet detected yet. If you are inside the MetaMask app, tap Connect anyway — it will retry. Otherwise open MetaMask → Browser and paste this URL.","wait");
+  }
+},300);
+
+async function rpc(url, method, params){
+  const r = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({jsonrpc:"2.0",id:1,method,params})});
+  const j = await r.json();
+  if (j.error) throw new Error(j.error.message||"rpc error");
+  return j.result;
+}
+async function call(to,data,url){
+  if (url) return rpc(url,"eth_call",[{to,data},"latest"]);
+  return eth.request({method:"eth_call",params:[{to,data},"latest"]});
+}
+const balanceOf = (tok,who,url) => call(tok,"0x70a08231"+encAddr(who),url);
+const allowance = (tok,o,s)     => call(tok,"0xdd62ed3e"+encAddr(o)+encAddr(s));
+
+$("b-connect").onclick = async () => {
+  try{
+    if(!eth) eth = window.ethereum || null;
+    if(!eth) throw new Error(
+      "No wallet is reachable from this browser. This page has to be opened INSIDE the MetaMask app: "
+      + "open MetaMask, tap the menu, choose Browser, and paste "
+      + location.href);
+    const as = await eth.request({method:"eth_requestAccounts"});
+    acct = as[0];
+    chain = await eth.request({method:"eth_chainId"});
+    $("w-acct").textContent = acct.slice(0,6)+"…"+acct.slice(-4);
+    $("w-chain").textContent = chain===ETH_HEX ? "Ethereum ✓"
+      : chain===RH_HEX ? "Robinhood Chain" : "chain "+parseInt(chain,16);
+    show("w-info",true); show("b-connect",false);
+    $("c1").classList.add("done");
+    setMsg("w-state","Connected.","ok");
+    $("s-safe").textContent = grp(SAFE);
+    if (chain !== ETH_HEX){
+      setMsg("w-state","Connected, but you are not on Ethereum. Switching…","wait");
+      try{ await eth.request({method:"wallet_switchEthereumChain",params:[{chainId:ETH_HEX}]});
+           return location.reload(); }
+      catch(e){ setMsg("w-state","Switch to Ethereum Mainnet in MetaMask, then reload.","bad"); return; }
+    }
+    show("c2",true); $("c2").classList.add("active");
+    getQuote();
+  }catch(e){ setMsg("w-state","Connect failed: "+(e.message||e),"bad"); }
+};
+
+async function getQuote(){
+  try{
+    setMsg("q-msg","Fetching a live quote…","wait");
+    $("b-approve").disabled = true; $("b-bridge").disabled = true;
+    const raw = await balanceOf(USDC,acct);
+    const bal = BigInt(raw);
+    $("q-bal").textContent = u6(bal)+" USDC";
+    if (bal === 0n){ setMsg("q-msg","No USDC in this wallet.","bad"); return; }
+    const body = {
+      user: acct, originChainId: 1, destinationChainId: RH_ID,
+      originCurrency: USDC, destinationCurrency: USDG,
+      recipient: acct,                      // self — the default binding
+      amount: bal.toString(), tradeType: "EXACT_INPUT"
+    };
+    const r = await fetch(REL+"/quote",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const j = await r.json();
+    if (!j.steps) throw new Error(j.message||"Relay returned no steps");
+    quote = j;
+    const d = j.details||{};
+    const out = Number((d.currencyOut||{}).amountFormatted||0);
+    const inn = Number((d.currencyIn ||{}).amountFormatted||0);
+    $("q-out").textContent = out.toFixed(6)+" USDG";
+    $("q-fee").textContent = "$"+(inn-out).toFixed(3)+"  ("+(((inn-out)/inn)*100).toFixed(2)+"%)";
+    const rcp = d.recipient||acct;
+    const mine = rcp.toLowerCase()===acct.toLowerCase();
+    $("q-to").textContent = mine ? "your wallet ✓" : rcp;
+    if (!mine){ setMsg("q-msg","STOP. Relay echoed a recipient that is not your wallet: "+rcp,"bad"); return; }
+
+    // skip the approve step entirely when the allowance already covers it
+    const dep = j.steps.find(s=>s.id==="deposit");
+    const spender = dep && dep.items && dep.items[0] && dep.items[0].data.to;
+    let have = 0n;
+    try { have = BigInt(await allowance(USDC,acct,spender)); } catch(e){}
+    needApprove = have < bal;
+    setMsg("q-msg","Quote good. "+(needApprove?"Approve first.":"Allowance already set — skip to step 4."),"ok");
+    $("c2").classList.add("done"); $("c2").classList.remove("active");
+    show("c3",true); show("c4",true);
+    if (needApprove){ $("c3").classList.add("active"); $("b-approve").disabled=false; }
+    else { $("c3").classList.add("done"); setMsg("a-msg","Already approved — nothing to sign here.","ok");
+           $("c4").classList.add("active"); $("b-bridge").disabled=false; }
+  }catch(e){ setMsg("q-msg","Quote failed: "+(e.message||e),"bad"); }
+}
+$("b-quote").onclick = getQuote;
+
+async function sendStep(stepId, msgId){
+  const st = quote.steps.find(s=>s.id===stepId);
+  if (!st) throw new Error("step "+stepId+" missing from the quote");
+  const it = st.items[0], d = it.data;
+  setMsg(msgId,"Confirm in MetaMask…","wait");
+  const hash = await eth.request({method:"eth_sendTransaction",params:[{
+    from: acct, to: d.to, data: d.data,
+    value: d.value && d.value!=="0" ? "0x"+BigInt(d.value).toString(16) : "0x0"
+  }]});
+  setMsg(msgId,"Sent "+hash.slice(0,18)+"…  waiting for the block.","wait");
+  for(let i=0;i<60;i++){
+    const rc = await eth.request({method:"eth_getTransactionReceipt",params:[hash]}).catch(()=>null);
+    if (rc){
+      if (BigInt(rc.status||"0x0")!==1n) throw new Error("transaction reverted: "+hash);
+      return {hash, check: it.check};
+    }
+    await new Promise(r=>setTimeout(r,3000));
+  }
+  throw new Error("no receipt after 3 minutes — check MetaMask activity before retrying");
+}
+
+$("b-approve").onclick = async () => {
+  $("b-approve").disabled = true;
+  try{
+    await sendStep("approve","a-msg");
+    setMsg("a-msg","Approved.","ok");
+    $("c3").classList.add("done"); $("c3").classList.remove("active");
+    $("c4").classList.add("active"); $("b-bridge").disabled=false;
+  }catch(e){ setMsg("a-msg",(e.message||String(e)),"bad"); $("b-approve").disabled=false; }
+};
+
+$("b-bridge").onclick = async () => {
+  $("b-bridge").disabled = true;
+  try{
+    const {check} = await sendStep("deposit","b-msg");
+    setMsg("b-msg","Deposited on Ethereum. Waiting for Relay to fill on Robinhood Chain…","wait");
+    const rid = (quote.details&&quote.details.requestId) || quote.requestId
+             || (check && (check.endpoint||"").split("requestId=")[1]);
+    let filled=false;
+    for(let i=0;i<60 && !filled;i++){
+      await new Promise(r=>setTimeout(r,4000));
+      try{
+        const s = await (await fetch(REL+"/intents/status?requestId="+rid)).json();
+        const st = s.status||s.state;
+        if (st==="success"||st==="filled"||st==="done") filled=true;
+        else if (st==="failure"||st==="refund") throw new Error("Relay reported "+st+". Funds refund to your wallet.");
+        else setMsg("b-msg","Relay status: "+st+"  ("+((i+1)*4)+"s)","wait");
+      }catch(e){ if(/Relay reported/.test(e.message)) throw e; }
+    }
+    setMsg("b-msg", filled ? "Filled. USDG is on Robinhood Chain."
+      : "Still pending. It usually lands in under a minute; you can continue to step 5 once your USDG shows.", filled?"ok":"wait");
+    $("c4").classList.add("done"); $("c4").classList.remove("active");
+    show("c5",true); $("c5").classList.add("active");
+    readUsdg();
+  }catch(e){ setMsg("b-msg",(e.message||String(e)),"bad"); $("b-bridge").disabled=false; }
+};
+
+async function readUsdg(){
+  try{
+    const b = BigInt(await balanceOf(USDG,acct,RH_RPC));
+    $("s-bal").textContent = u6(b)+" USDG";
+    $("b-send").disabled = (b===0n) || (chain!==RH_HEX);
+    if (b===0n) setMsg("s-msg","No USDG yet — the bridge is still filling. This refreshes every 8s.","wait");
+    else if (chain!==RH_HEX) setMsg("s-msg","USDG has arrived. Switch to Robinhood Chain to send it on.","wait");
+    else setMsg("s-msg","Ready. Check the address above against MetaMask before confirming.","ok");
+    if (b===0n) setTimeout(readUsdg,8000);
+  }catch(e){ setMsg("s-msg","Could not read USDG: "+(e.message||e),"bad"); }
+}
+
+$("b-switch").onclick = async () => {
+  try{ await eth.request({method:"wallet_switchEthereumChain",params:[{chainId:RH_HEX}]}); }
+  catch(e){
+    if (e.code===4902 || /Unrecognized chain/i.test(e.message||"")){
+      await eth.request({method:"wallet_addEthereumChain",params:[{
+        chainId:RH_HEX, chainName:"Robinhood Chain",
+        nativeCurrency:{name:"Ether",symbol:"ETH",decimals:18},
+        rpcUrls:[RH_RPC]}]});
+    } else { setMsg("s-msg","Switch failed: "+(e.message||e),"bad"); return; }
+  }
+  location.reload();
+};
+
+$("b-send").onclick = async () => {
+  $("b-send").disabled = true;
+  try{
+    if (chain!==RH_HEX) throw new Error("you are not on Robinhood Chain");
+    const b = BigInt(await balanceOf(USDG,acct,RH_RPC));
+    if (b===0n) throw new Error("no USDG to send");
+    setMsg("s-msg","Confirm in MetaMask. The recipient it shows must be "+SAFE,"wait");
+    const hash = await eth.request({method:"eth_sendTransaction",params:[{
+      from: acct, to: USDG, value:"0x0",
+      data: "0xa9059cbb"+encAddr(SAFE)+encUint(b)
+    }]});
+    setMsg("s-msg","Sent "+hash.slice(0,18)+"… waiting.","wait");
+    for(let i=0;i<40;i++){
+      const rc = await rpc(RH_RPC,"eth_getTransactionReceipt",[hash]).catch(()=>null);
+      if (rc){
+        if (BigInt(rc.status||"0x0")!==1n) throw new Error("transfer reverted");
+        setMsg("s-msg","Transferred.","ok");
+        $("c5").classList.add("done"); $("c5").classList.remove("active");
+        show("c6",true);
+        const sb = BigInt(await balanceOf(USDG,SAFE,RH_RPC));
+        $("d-bal").textContent = u6(sb)+" USDG";
+        setMsg("d-msg","In the Safe. The module can trade this; it cannot send it out.","ok");
+        return;
+      }
+      await new Promise(r=>setTimeout(r,3000));
+    }
+    throw new Error("no receipt after 2 minutes — check MetaMask activity");
+  }catch(e){ setMsg("s-msg",(e.message||String(e)),"bad"); $("b-send").disabled=false; }
+};
+
+/* Landing here already on Robinhood Chain (e.g. after the switch reload)
+   means the bridge hop is probably done — go straight to step 5. */
+window.addEventListener("load",()=>{ setTimeout(async()=>{
+  if (!eth) return;
+  try{
+    const as = await eth.request({method:"eth_accounts"});
+    if (!as.length) return;
+    acct = as[0]; chain = await eth.request({method:"eth_chainId"});
+    if (chain===RH_HEX){
+      $("w-acct").textContent = acct.slice(0,6)+"…"+acct.slice(-4);
+      $("w-chain").textContent = "Robinhood Chain";
+      show("w-info",true); show("b-connect",false);
+      $("c1").classList.add("done"); setMsg("w-state","Connected on Robinhood Chain.","ok");
+      $("s-safe").textContent = grp(SAFE);
+      show("c5",true); $("c5").classList.add("active");
+      readUsdg();
+    }
+  }catch(e){}
+},800); });
+</script>

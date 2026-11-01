@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>Module Owner Controls</title>
+<!--
+  OWNER-ONLY MODULE CONTROLS.
+
+  ── WHY THIS WAS REWRITTEN (third attempt) ──
+  He reported three times that nothing was clickable on mobile. I twice guessed
+  at causes (quirks mode, touch-action) and twice failed. The fix came from
+  DIFFING against approve-v4, the page that demonstrably works on his phone:
+
+      feature          approve-v4   old owner page
+      <details>             0             8
+      IIFE wrapper          0            24
+      preventDefault        0             1
+      z-index on buttons    0             1
+      MetaMask deep link    1             0   <-- the actual difference
+
+  approve-v4 carries a metamask.app.link deep link. Opened in Safari there is
+  no window.ethereum, every button silently does nothing, and the page looks
+  "not clickable" -- exactly what he described. That link bounces into
+  MetaMask's own browser where the wallet exists.
+
+  This page now mirrors approve-v4's mechanics precisely: plain onclick, no
+  IIFE, no details, no preventDefault, no touch-action/z-index, and the deep
+  link first. Calldata is always visible rather than hidden behind a toggle,
+  so the paste-into-MetaMask route needs nothing from this script at all.
+
+  ── WHY THE AGENT CANNOT DO ANY OF THIS ──
+  Verified by simulation: these setters succeed from the EOA and revert with
+  "not safe owner" from the agent key. Caps and scope are the fence; an agent
+  that could widen its own fence is not a fence.
+-->
+<style>
+:root{--bg:#0E0F12;--card:#16181D;--card2:#1D2027;--line:#2A2E37;
+--ink:#F2F3F5;--ink2:#A8ADB8;--mut:#6E747F;
+--ok:#4FB477;--warn:#D9A24A;--bad:#D25F5F;--acc:#5B8DD9;
+--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+ font-size:16px;line-height:1.5;padding:16px 12px 60px}
+.wrap{max-width:680px;margin:0 auto}
+h1{font-size:1.2rem;margin:0 0 4px}
+h2{font-size:1rem;margin:0 0 10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px;margin-bottom:13px}
+.row{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line);font-size:.88rem}
+.row:last-child{border-bottom:0}
+.row span:first-child{color:var(--ink2)}
+.row span:last-child{font-family:var(--mono);text-align:right;word-break:break-all}
+button{font:inherit;font-weight:600;padding:13px 16px;border-radius:9px;border:0;
+ background:var(--acc);color:#fff;cursor:pointer;margin:8px 6px 0 0}
+button.sec{background:var(--card2);color:var(--ink);border:1px solid var(--line)}
+button.danger{background:var(--bad);color:#fff}
+.act{border-top:1px solid var(--line);padding-top:12px;margin-top:12px}
+.act b{font-size:.9rem;display:block}
+.cd{font-family:var(--mono);font-size:.66rem;background:var(--card2);border:1px solid var(--line);
+ border-radius:7px;padding:9px;word-break:break-all;margin-top:9px;
+ user-select:all;-webkit-user-select:all}
+.note{font-size:.8rem;color:var(--mut);margin:9px 0 0}
+pre{background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:10px;
+ font-family:var(--mono);font-size:.72rem;max-height:200px;overflow:auto;white-space:pre-wrap}
+code{font-family:var(--mono);font-size:.84em;background:var(--card2);padding:1px 5px;border-radius:4px}
+.big{display:block;width:100%;text-align:center;margin:0 0 4px}
+a{color:var(--acc)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="status" style="position:sticky;top:0;z-index:50;background:var(--card2);border:1px solid var(--line);border-radius:9px;padding:11px;margin-bottom:12px;font-size:.86rem">Ready. Tap <b>Connect MetaMask</b> first.</div>
+<h1>Module owner controls</h1>
+<p class="note" style="margin-top:0">Must be signed by <code>0xdB489066&hellip;f9cf4FD</code>. The agent cannot do any of this.</p>
+
+<div class="card">
+<a href="https://metamask.app.link/dapp/book-and-benchmark.vercel.app/owner" style="text-decoration:none">
+<button class="big">Open this page in the MetaMask app</button></a>
+<p class="note" style="margin-top:4px">If buttons do nothing, you are in Safari and there is no wallet here. Tap that first.</p>
+<div class="row"><span>wallet</span><span id="dWallet">checking</span></div>
+<div class="row"><span>network</span><span id="dChain">&mdash;</span></div>
+<div class="row"><span>account</span><span id="acct">&mdash;</span></div>
+<button id="bConnect">Connect MetaMask</button>
+<button id="bNet" class="sec">Switch network</button>
+</div>
+
+<div class="card"><h2>A &nbsp;Let PRIORS be sold at size</h2>
+<p class="note" style="margin-top:0">PRIORS is already allowed and its pool already in scope. Only the cap blocks a sale. <b>That cap was zeroed after 12 October, when the position sold twice without your authorisation</b> — raising it restores exactly that capability, and is also the only way your own +100% sell-half order can execute.</p>
+<p class="note">All of A sends to <code>0xa20660ABf6e07D6607d7C3aaDAee6E745EDBBE5E</code>, value 0.</p>
+<div class="act"><b>Set PRIORS cap 13,000 / 26,000 daily</b>
+<button id="b1" class="go">Approve in MetaMask</button> <button id="c1" class="sec">Copy hex</button>
+<div class="cd" id="d1">0xefeec38c000000000000000000000000edbf91223639800bcd5756815caf908df3b890be0000000000000000000000000000000000000000000002c0bb3dd30c4e200000000000000000000000000000000000000000000000000581767ba6189c400000</div></div>
+<div class="act"><b>Re-lock PRIORS to 0 (deny all)</b>
+<button id="b2" class="danger">Approve in MetaMask</button> <button id="c2" class="sec">Copy hex</button>
+<div class="cd" id="d2">0xefeec38c000000000000000000000000edbf91223639800bcd5756815caf908df3b890be00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000</div></div>
+</div>
+
+<div class="card"><h2>B &nbsp;Make HOOKR tradeable</h2>
+<p class="note" style="margin-top:0">HOOKR measured <b>342% annualised volatility</b> — an LP on it fails the same way PRIORS does. Whitelisting still lets you <b>buy and hold HOOKR spot</b>, which is a separate and reasonable use.</p>
+<p class="note">All of B sends to <code>0xa20660ABf6e07D6607d7C3aaDAee6E745EDBBE5E</code>, value 0.</p>
+<div class="act"><b>1  Allow HOOKR token</b>
+<button id="b3" class="go">Approve in MetaMask</button> <button id="c3" class="sec">Copy hex</button>
+<div class="cd" id="d3">0x3816a29200000000000000000000000018e674231a58c239dc7daedcffe15ec3a24cff5c0000000000000000000000000000000000000000000000000000000000000001</div></div>
+<div class="act"><b>2  HOOKR/USDG pool in scope</b>
+<button id="b4" class="go">Approve in MetaMask</button> <button id="c4" class="sec">Copy hex</button>
+<div class="cd" id="d4">0x3ce17e8d0b362d89fcae933d150e735d28c70e13469a4e14d3b3a36ac05eb5a1a77f24740000000000000000000000000000000000000000000000000000000000000001</div></div>
+<div class="act"><b>3  HOOKR caps 6k/12k</b>
+<button id="b5" class="go">Approve in MetaMask</button> <button id="c5" class="sec">Copy hex</button>
+<div class="cd" id="d5">0xefeec38c00000000000000000000000018e674231a58c239dc7daedcffe15ec3a24cff5c00000000000000000000000000000000000000000000014542ba12a337c0000000000000000000000000000000000000000000000000028a857425466f800000</div></div>
+<div class="act"><b>4  USDG caps 200/400</b>
+<button id="b6" class="go">Approve in MetaMask</button> <button id="c6" class="sec">Copy hex</button>
+<div class="cd" id="d6">0xefeec38c0000000000000000000000005fc5360d0400a0fd4f2af552add042d716f1d168000000000000000000000000000000000000000000000000000000000bebc2000000000000000000000000000000000000000000000000000000000017d78400</div></div>
+</div>
+
+
+<div class="card"><h2>D &nbsp;Buy HOOKR with WETH &mdash; the route that actually works</h2>
+<p class="note" style="margin-top:0"><b>This is what blocks the $40 WETH&rarr;HOOKR buy right now.</b>
+HOOKR is capped at <code>0</code> on both modules, which is a hard deny, and the V4 module refuses WETH
+outright. The one clean path is the <b>HOOKR/WETH 1% pool on V3</b>, where WETH is already uncapped
+&mdash; verified on-chain as token0 WETH / token1 HOOKR, $109k TVL, ~$100k a day of real volume.</p>
+<p class="note">All of D sends to the <b>V3</b> module <code>0xaD43C9d7200B4284F5647d4F38817682B6360876</code>, value 0.
+Sign 1 and 2 and I can execute the buy immediately. 3 is what lets me ever SELL it again &mdash; without it
+the position is one-way.</p>
+<div class="act"><b>1&nbsp; HOOKR/WETH 1% pool in scope</b>
+<button id="bD1" class="go">Approve in MetaMask</button> <button id="cD1" class="sec">Copy hex</button>
+<div class="cd" id="dD1">0x20bec12c00000000000000000000000042b19e5e3f28c4148c518444546f102f6ba87ab10000000000000000000000000000000000000000000000000000000000000001</div></div>
+<div class="act"><b>2&nbsp; Allow HOOKR token on V3</b>
+<button id="bD2" class="go">Approve in MetaMask</button> <button id="cD2" class="sec">Copy hex</button>
+<div class="cd" id="dD2">0x3816a29200000000000000000000000018e674231a58c239dc7daedcffe15ec3a24cff5c0000000000000000000000000000000000000000000000000000000000000001</div></div>
+<div class="act"><b>3&nbsp; HOOKR caps 5,000 / 10,000 daily &mdash; needed to exit</b>
+<button id="bD3" class="go">Approve in MetaMask</button> <button id="cD3" class="sec">Copy hex</button>
+<div class="cd" id="dD3">0xefeec38c00000000000000000000000018e674231a58c239dc7daedcffe15ec3a24cff5c00000000000000000000000000000000000000000000010f0cf064dd5920000000000000000000000000000000000000000000000000021e19e0c9bab2400000</div></div>
+</div>
+<div class="card"><h2>C &nbsp;Let the Safe LP cbBTC / WETH 0.3%</h2>
+<p class="note" style="margin-top:0">WETH and USDG are already allowed here. Only cbBTC and the pool are missing. <b>This section goes to a DIFFERENT contract</b> than A and B. Enabling is not committing — BTC-vs-ETH vol is still being measured. There is a 4th step later: after the first mint you sign once more to whitelist that position's id.</p>
+<p class="note">All of C sends to <code>0xaD43C9d7200B4284F5647d4F38817682B6360876</code>, value 0.</p>
+<div class="act"><b>1  cbBTC/WETH 0.3% pool in scope</b>
+<button id="b7" class="go">Approve in MetaMask</button> <button id="c7" class="sec">Copy hex</button>
+<div class="cd" id="d7">0x20bec12c000000000000000000000000d30e44aae604b42a63f6f9a8109fd0408f35b9fb0000000000000000000000000000000000000000000000000000000000000001</div></div>
+<div class="act"><b>2  Allow cbBTC token</b>
+<button id="b8" class="go">Approve in MetaMask</button> <button id="c8" class="sec">Copy hex</button>
+<div class="cd" id="d8">0x3816a292000000000000000000000000cec185eb182c47d1ba1efc84e6959e18cd620be40000000000000000000000000000000000000000000000000000000000000001</div></div>
+<div class="act"><b>3  cbBTC caps 0.002 / 0.005</b>
+<button id="b9" class="go">Approve in MetaMask</button> <button id="c9" class="sec">Copy hex</button>
+<div class="cd" id="d9">0xefeec38c000000000000000000000000cec185eb182c47d1ba1efc84e6959e18cd620be40000000000000000000000000000000000000000000000000000000000030d40000000000000000000000000000000000000000000000000000000000007a120</div></div>
+</div>
+
+<div class="card">
+<p class="note" style="margin-top:0"><b>No wallet?</b> Every hex block above works by hand:
+MetaMask &rarr; Settings &rarr; Advanced &rarr; <b>Show Hex Data</b> on, then Send &rarr; paste the
+<i>To</i> address shown in that section &rarr; amount <b>0</b> &rarr; paste the hex into Hex Data.</p>
+<pre id="log">ready</pre>
+</div>
+</div>
+
+<script>
+var CHAIN="0x1237";
+function $(i){return document.getElementById(i)}
+function log(m){var l=$("log");if(l)l.textContent=(new Date().toTimeString().slice(0,8))+"  "+m+"\n"+l.textContent;
+  /* FEEDBACK MUST BE WHERE THE EYE IS. The log sat below three long sections,
+     so a click produced no visible change anywhere near the button and the
+     page read as dead. This mirrors every message into a sticky bar. */
+  var s=$("status"); if(s) s.textContent=m;}
+function eth(){return window.ethereum}
+var acct=null;
+
+function copy(src,btn){
+  var t=$(src).textContent.trim(), b=$(btn);
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(function(){
+      var o=b.textContent;b.textContent="copied";setTimeout(function(){b.textContent=o},1400);
+    }).catch(function(){log("clipboard blocked - press and hold the hex to select")});
+  } else log("clipboard unavailable - press and hold the hex to select");
+}
+
+function probe(){
+  if(!eth()){ $("dWallet").textContent="NOT FOUND - open in MetaMask"; return; }
+  $("dWallet").textContent="yes"+(eth().isMetaMask?" (MetaMask)":"");
+  eth().request({method:"eth_chainId"}).then(function(c){
+    $("dChain").textContent = c===CHAIN ? "Robinhood Chain" : "wrong network ("+parseInt(c,16)+")";
+  }).catch(function(){});
+  eth().request({method:"eth_accounts"}).then(function(a){
+    if(a&&a.length){acct=a[0];$("acct").textContent=acct}
+  }).catch(function(){});
+}
+
+function connect(){
+  if(!eth()){ log("no wallet - tap 'Open this page in the MetaMask app'"); return; }
+  eth().request({method:"eth_requestAccounts"}).then(function(a){
+    acct=a[0]; $("acct").textContent=acct; log("connected "+acct);
+    if(acct.toLowerCase()!=="0xdb48906603515a434b567c88ec5ae83c1f9cf4fd")
+      log("WARNING: not the Safe owner - every call will revert");
+    probe();
+  }).catch(function(e){log("connect failed: "+(e.message||e))});
+}
+
+function switchNet(){
+  if(!eth()){ log("no wallet"); return; }
+  eth().request({method:"wallet_switchEthereumChain",params:[{chainId:CHAIN}]})
+   .then(function(){log("switched");probe()})
+   .catch(function(e){
+     if(e.code===4902) eth().request({method:"wallet_addEthereumChain",params:[{chainId:CHAIN,
+       chainName:"Robinhood Chain",nativeCurrency:{name:"Ether",symbol:"ETH",decimals:18},
+       rpcUrls:["https://rpc.mainnet.chain.robinhood.com"]}]}).then(function(){log("added");probe()});
+     else log("switch failed: "+(e.message||e));
+   });
+}
+
+function send(to,data,label){
+  if(!eth()){ log("no wallet - use the hex block by hand, or open in MetaMask"); return; }
+  /* WAS: if(!acct){ connect(); return; }  -- which meant the FIRST click on any
+     action button only connected and then gave up silently, and you had to
+     click again. Now it connects and continues in the same gesture. */
+  if(!acct){
+    log("connecting, then "+label);
+    eth().request({method:"eth_requestAccounts"}).then(function(a){
+      acct=a[0]; $("acct").textContent=acct; probe(); doSend(to,data,label);
+    }).catch(function(e){ log("connect rejected: "+(e.message||e)); });
+    return;
+  }
+  doSend(to,data,label);
+}
+
+function doSend(to,data,label){
+  /* NETWORK FIRST. The rewrite dropped this check and it is why nothing
+     happened: on the wrong chain the module address does not exist, the
+     eth_call pre-flight errors, and the old code gave up BEFORE ever calling
+     eth_sendTransaction -- so MetaMask never prompted and the page looked
+     dead. Switching first also makes MetaMask prompt, which is itself visible
+     proof the button worked. */
+  eth().request({method:"eth_chainId"}).then(function(c){
+    if(c===CHAIN) return true;
+    log("wrong network - switching to Robinhood Chain");
+    return eth().request({method:"wallet_switchEthereumChain",params:[{chainId:CHAIN}]})
+      .then(function(){return true})
+      .catch(function(e){
+        if(e.code===4902) return eth().request({method:"wallet_addEthereumChain",params:[{chainId:CHAIN,
+          chainName:"Robinhood Chain",nativeCurrency:{name:"Ether",symbol:"ETH",decimals:18},
+          rpcUrls:["https://rpc.mainnet.chain.robinhood.com"]}]}).then(function(){return true});
+        throw e;
+      });
+  }).then(function(){ realSend(to,data,label); })
+   .catch(function(e){ log("network switch failed: "+(e.message||e)); });
+}
+
+function realSend(to,data,label){
+  log(label+" - simulating");
+  eth().request({method:"eth_call",params:[{to:to,data:data},"latest"]}).then(function(){
+    log(label+" - simulates OK, requesting signature");
+    return eth().request({method:"eth_sendTransaction",params:[{from:acct,to:to,data:data}]});
+  }).then(function(h){
+    if(!h) return;
+    log(label+" SENT "+h);
+  }).catch(function(e){
+    /* DO NOT SWALLOW IT. A failed pre-flight used to end here, which is
+       indistinguishable from a dead button. Say so, then offer to send
+       anyway -- the wallet is the real gate, not my simulation. */
+    var msg=String(e.message||e).slice(0,120);
+    log("pre-flight failed: "+msg);
+    if(confirm("The read-only check failed:\n\n"+msg+"\n\nSend the transaction anyway? MetaMask will still ask you to confirm."))
+      eth().request({method:"eth_sendTransaction",params:[{from:acct,to:to,data:data}]})
+        .then(function(h){log(label+" SENT "+h)})
+        .catch(function(e2){log(label+" rejected: "+String(e2.message||e2).slice(0,120))});
+    else log(label+" cancelled");
+  });
+}
+
+$("bConnect").onclick=connect;
+$("bNet").onclick=switchNet;
+$("b1").onclick=function(){send("0xa20660ABf6e07D6607d7C3aaDAee6E745EDBBE5E",$("d1").textContent.trim(),"Set PRIORS cap 13,000 / 26,000 daily")};
+$("c1").onclick=function(){copy("d1","c1")};
+$("b2").onclick=function(){send("0xa20660ABf6e07D6607d7C3aaDAee6E745EDBBE5E",$("d2").textContent.trim(),"Re-lock PRIORS to 0 (deny all)")};
+$("c2").onclick=function(){copy("d2","c2")};
+
+var V3MOD="0xaD43C9d7200B4284F5647d4F38817682B6360876";
+$("bD1").onclick=function(){send(V3MOD,$("dD1").textContent.trim(),"1  HOOKR/WETH 1% pool in scope")};
+$("bD2").onclick=function(){send(V3MOD,$("dD2").textContent.trim(),"2  Allow HOOKR token on V3")};
+$("bD3").onclick=function(){send(V3MOD,$("dD3").textContent.trim(),"3  HOOKR caps 5k/10k")};
+$("b3").onclick=function(){send("0xa20660ABf6e07D6607d7C3aaDAee6E745EDBBE5E",$("d3").textContent.trim(),"1  Allow HOOKR token")};
+$("cD1").onclick=function(){copy("dD1","c3")};
+$("cD2").onclick=function(){copy("dD2","c3")};
+$("cD3").onclick=function(){copy("dD3","c3")};
+$("c3").onclick=function(){copy("d3","c3")};
+$("b4").onclick=function(){send("0xa20660ABf6e07D6607d7C3aaDAee6E745EDBBE5E",$("d4").textContent.trim(),"2  HOOKR/USDG pool in scope")};
+$("c4").onclick=function(){copy("d4","c4")};
+$("b5").onclick=function(){send("0xa20660ABf6e07D6607d7C3aaDAee6E745EDBBE5E",$("d5").textContent.trim(),"3  HOOKR caps 6k/12k")};
+$("c5").onclick=function(){copy("d5","c5")};
+$("b6").onclick=function(){send("0xa20660ABf6e07D6607d7C3aaDAee6E745EDBBE5E",$("d6").textContent.trim(),"4  USDG caps 200/400")};
+$("c6").onclick=function(){copy("d6","c6")};
+$("b7").onclick=function(){send("0xaD43C9d7200B4284F5647d4F38817682B6360876",$("d7").textContent.trim(),"1  cbBTC/WETH 0.3% pool in scope")};
+$("c7").onclick=function(){copy("d7","c7")};
+$("b8").onclick=function(){send("0xaD43C9d7200B4284F5647d4F38817682B6360876",$("d8").textContent.trim(),"2  Allow cbBTC token")};
+$("c8").onclick=function(){copy("d8","c8")};
+$("b9").onclick=function(){send("0xaD43C9d7200B4284F5647d4F38817682B6360876",$("d9").textContent.trim(),"3  cbBTC caps 0.002 / 0.005")};
+$("c9").onclick=function(){copy("d9","c9")};
+probe();
+setTimeout(probe,1500);
+</script>
+</body>
+</html>

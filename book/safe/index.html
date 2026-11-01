@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>Safe Holdings</title>
+<!--
+  WHAT IS ACTUALLY IN THE SAFE — nothing else.
+
+  Every number here is read from the chain on load and every 12s after:
+  balances with balanceOf, prices from each pool's own slot0. No feed, no
+  cache, no deploy-time snapshot that can go stale between pushes.
+
+  ── THE COLUMN THAT MATTERS AND NO OTHER TRACKER HAS ──
+  "can the agent sell it" is read live from the module's maxPerSwap. A cap of
+  0 is a hard deny: the asset is HELD and I cannot move it. That is a property
+  of the position, it changes without warning when an owner signs, and getting
+  it wrong in either direction is how money moves that should not have.
+-->
+<style>
+:root{
+ --bg:#040705; --panel:#070C09; --line:#13261B; --line2:#1D3A28;
+ --ink:#C8FFE0; --ink2:#5FA37C; --mut:#36604A;
+ --grn:#00E676; --grn2:#00C853; --amb:#FFB300; --red:#FF5252;
+ --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{overflow-x:hidden}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--mono);
+ font-size:15px;line-height:1.4;padding:0 0 40px;-webkit-text-size-adjust:100%;
+ background-image:repeating-linear-gradient(0deg,rgba(0,230,118,.025) 0 1px,transparent 1px 3px)}
+.wrap{max-width:780px;margin:0 auto;padding:0 12px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.wrap>*{min-width:0;max-width:100%}
+
+/* ── header: a terminal banner, not a web hero ───────────────────────── */
+.hdr{border-bottom:1px solid var(--line2);padding:16px 2px 12px;margin-top:8px}
+.prompt{font-size:.7rem;color:var(--grn);letter-spacing:.06em;margin-bottom:10px}
+.prompt b{color:var(--ink)}
+.addr{font-size:.62rem;color:var(--mut);word-break:break-all;margin-top:2px}
+.tot{font-size:2.5rem;font-weight:700;letter-spacing:-.03em;line-height:1;
+ color:var(--grn);text-shadow:0 0 18px rgba(0,230,118,.35);font-variant-numeric:tabular-nums}
+.sub{font-size:.7rem;color:var(--ink2);margin-top:6px;font-variant-numeric:tabular-nums}
+.heropl{font-size:.9rem;font-weight:700;margin-top:8px;font-variant-numeric:tabular-nums}
+.up{color:var(--grn)} .dn{color:var(--red)} .mut{color:var(--mut)} .wn{color:var(--amb)}
+
+/* ── panels: square, hairline, no rounding ───────────────────────────── */
+.card{background:var(--panel);border:1px solid var(--line);padding:0}
+.lbl{font-size:.6rem;text-transform:uppercase;letter-spacing:.18em;color:var(--grn);
+ font-weight:700;margin:0;padding:9px 12px;border-bottom:1px solid var(--line);
+ display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;background:rgba(0,230,118,.04)}
+.lbl .r{font-weight:400;letter-spacing:.04em;text-transform:none;color:var(--mut);font-size:.66rem}
+.pad{padding:4px 12px 10px}
+
+.ac.go{text-decoration:none;color:inherit;cursor:pointer}
+.ac.go:active{background:rgba(0,230,118,.05)}
+.chlnk{font-size:.62rem;color:var(--grn);letter-spacing:.1em;text-transform:uppercase;
+ border:1px solid var(--line);padding:1px 6px;margin-left:6px}
+.mcl{font-size:.68rem;color:var(--ink2);grid-column:1/-1}
+
+/* ── allocation bar ──────────────────────────────────────────────────── */
+.bar{height:6px;background:#0A130D;overflow:hidden;display:flex;margin:10px 0 9px;
+ border:1px solid var(--line)}
+.bar i{display:block;height:100%}
+.key{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.66rem;color:var(--ink2);margin-bottom:6px}
+.key b{color:var(--ink)}
+.sw{display:inline-block;width:7px;height:7px;margin-right:6px;vertical-align:middle}
+
+/* ── asset rows ──────────────────────────────────────────────────────── */
+.ac{display:grid;grid-template-columns:1fr auto;gap:1px 10px;padding:10px 0;
+ border-bottom:1px solid var(--line)}
+.ac:last-of-type{border-bottom:0}
+.ac .nm{font-weight:700;font-size:.92rem;letter-spacing:.02em;display:flex;align-items:center;gap:7px}
+.ac .vl{font-size:.95rem;text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
+.ac .sub2{font-size:.68rem;color:var(--mut);font-variant-numeric:tabular-nums}
+.ac .pl{font-size:.76rem;text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
+.wt{font-size:.6rem;color:var(--grn);font-weight:700;border:1px solid var(--line2);
+ padding:1px 5px;letter-spacing:.04em}
+.pill{display:inline-block;font-size:.55rem;font-weight:700;letter-spacing:.1em;
+ padding:2px 6px;text-transform:uppercase;border:1px solid}
+.pill.hold{color:var(--amb);border-color:rgba(255,179,0,.4)}
+.pill.free{color:var(--grn);border-color:rgba(0,230,118,.35)}
+
+.row{display:flex;justify-content:space-between;gap:10px;padding:6px 0;
+ border-bottom:1px solid var(--line);font-size:.76rem}
+.row:last-child{border-bottom:0}
+.row span:first-child{color:var(--ink2)}
+.row span:last-child{font-variant-numeric:tabular-nums;color:var(--ink)}
+.foot{font-size:.64rem;color:var(--mut);margin:10px 0 0;line-height:1.5}
+.dot{display:inline-block;width:6px;height:6px;background:var(--grn);margin-right:6px;
+ vertical-align:middle;box-shadow:0 0 6px var(--grn)}
+.dot.stale{background:var(--amb);box-shadow:0 0 6px var(--amb)}
+.dot.bad{background:var(--red);box-shadow:0 0 6px var(--red)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="hdr">
+  <div class="prompt">&gt; safe <b>--holdings</b> --live<span class="mut"> | agent 0x45e3…99c4f</span></div>
+  <div class="tot" id="tot">&mdash;</div>
+  <div class="sub" id="totsub">&nbsp;</div>
+  <div class="heropl" id="heropl">&nbsp;</div>
+  <div class="addr">0x4F91BeABF6d64648141032A47Efa662Ed852888c</div>
+  <div class="addr"><span class="dot" id="dot"></span><span id="stamp">reading chain&hellip;</span></div>
+</div>
+
+<div class="card">
+  <p class="lbl"><span>Allocation</span><span class="r" id="alloccnt">&mdash;</span></p>
+  <div class="pad">
+  <div class="bar" id="bar"></div>
+  <div class="key" id="key"></div>
+  <div id="rows"></div>
+  <p class="foot" id="foot"></p>
+  </div>
+
+  
+  
+  
+</div>
+
+
+</div>
+
+<div class="card">
+  <p class="lbl"><span>LP positions</span><span class="r" id="lpcnt">&mdash;</span></p>
+  <div class="pad"><div id="lp"><div class="row"><span>checking&hellip;</span><span>&mdash;</span></div></div>
+  
+</div></div>
+
+<div class="card">
+  <p class="lbl"><span>Prices</span><span class="r" id="asof">each from its own pool's slot0</span></p>
+  <div class="pad"><div id="px"></div></div>
+</div>
+
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════
+   KECCAK-256 OF EXACTLY 64 BYTES.
+
+   Every storage slot this page needs is keccak(abi.encode(bytes32,uint256)),
+   which is always 64 bytes — one rate block at rate 136. Writing the general
+   sponge would add padding and multi-block paths that are never exercised
+   and therefore never tested.
+
+   This is why the book can follow price anywhere. The previous version baked
+   a tick map at deploy time and went blind the moment spot drifted outside
+   the injected window. Verified 415/415 against ethers.keccak256, including
+   400 random messages; the first draft had a 26-entry RHO table with a
+   duplicated 25, which shifted every rotation from lane 14 on.
+   ═══════════════════════════════════════════════════════════════════════ */
+var RC=[[0,1],[0,0x8082],[0x80000000,0x808a],[0x80000000,0x80008000],[0,0x808b],
+[0,0x80000001],[0x80000000,0x80008081],[0x80000000,0x8009],[0,0x8a],[0,0x88],
+[0,0x80008009],[0,0x8000000a],[0,0x8000808b],[0x80000000,0x8b],[0x80000000,0x8089],
+[0x80000000,0x8003],[0x80000000,0x8002],[0x80000000,0x80],[0,0x800a],
+[0x80000000,0x8000000a],[0x80000000,0x80008081],[0x80000000,0x8080],[0,0x80000001],
+[0x80000000,0x80008008]];
+var RHO=[ 0, 1,62,28,27, 36,44, 6,55,20, 3,10,43,25,39, 41,45,15,21, 8, 18, 2,61,56,14];
+function rotl(h,l,n){
+  if(n===0) return [h,l];
+  if(n<32)  return [(h<<n)|(l>>>(32-n)),(l<<n)|(h>>>(32-n))];
+  if(n===32) return [l,h];
+  n-=32;    return [(l<<n)|(h>>>(32-n)),(h<<n)|(l>>>(32-n))];
+}
+function keccak64(bytes){
+  var hi=new Int32Array(25), lo=new Int32Array(25), i, b;
+  var blk=new Uint8Array(136); blk.set(bytes,0); blk[64]=0x01; blk[135]|=0x80;
+  for(i=0;i<17;i++){ var l=0,h=0;
+    for(b=7;b>=4;b--) h=(h<<8)|blk[i*8+b];
+    for(b=3;b>=0;b--) l=(l<<8)|blk[i*8+b];
+    lo[i]^=l; hi[i]^=h; }
+  var Ch=new Int32Array(5), Cl=new Int32Array(5),
+      Bh=new Int32Array(25), Bl=new Int32Array(25), x,y,r,t;
+  for(r=0;r<24;r++){
+    for(x=0;x<5;x++){ var ch=0,cl=0;
+      for(y=0;y<5;y++){ ch^=hi[x+5*y]; cl^=lo[x+5*y]; } Ch[x]=ch; Cl[x]=cl; }
+    for(x=0;x<5;x++){
+      t=rotl(Ch[(x+1)%5],Cl[(x+1)%5],1);
+      var dh=Ch[(x+4)%5]^t[0], dl=Cl[(x+4)%5]^t[1];
+      for(y=0;y<5;y++){ hi[x+5*y]^=dh; lo[x+5*y]^=dl; } }
+    for(x=0;x<5;x++) for(y=0;y<5;y++){
+      t=rotl(hi[x+5*y],lo[x+5*y],RHO[x+5*y]);
+      var nx=y, ny=(2*x+3*y)%5; Bh[nx+5*ny]=t[0]; Bl[nx+5*ny]=t[1]; }
+    for(x=0;x<5;x++) for(y=0;y<5;y++){
+      hi[x+5*y]=Bh[x+5*y]^((~Bh[(x+1)%5+5*y])&Bh[(x+2)%5+5*y]);
+      lo[x+5*y]=Bl[x+5*y]^((~Bl[(x+1)%5+5*y])&Bl[(x+2)%5+5*y]); }
+    hi[0]^=RC[r][0]; lo[0]^=RC[r][1];
+  }
+  var out=new Uint8Array(32);
+  for(i=0;i<4;i++){
+    for(b=0;b<4;b++) out[i*8+b]=(lo[i]>>>(8*b))&0xff;
+    for(b=0;b<4;b++) out[i*8+4+b]=(hi[i]>>>(8*b))&0xff; }
+  return out;
+}
+function hx(u){var s="0x",i;for(i=0;i<u.length;i++)s+=("0"+u[i].toString(16)).slice(-2);return s}
+function bsOf(h){h=h.replace(/^0x/,"");var u=new Uint8Array(h.length/2),i;
+  for(i=0;i<u.length;i++)u[i]=parseInt(h.substr(i*2,2),16);return u}
+function k64(h){return hx(keccak64(bsOf(h)))}
+function w256(v){return BigInt.asUintN(256,BigInt(v)).toString(16).padStart(64,"0")}
+function slotAdd(h,n){return "0x"+(BigInt(h)+BigInt(n)).toString(16).padStart(64,"0")}
+
+var RPC="https://rpc.mainnet.chain.robinhood.com";
+var SAFE="0x4F91BeABF6d64648141032A47Efa662Ed852888c";
+var PM="0x8366a39cc670b4001a1121b8f6a443a643e40951";
+var V3MOD="0xaD43C9d7200B4284F5647d4F38817682B6360876";
+var V4MOD="0xa20660ABf6e07D6607d7C3aaDAee6E745EDBBE5E";
+var NPM="0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3";
+var PRIORS_PID="0x9be7ab27227e115085b0949a819a73f6963ddc6da0c6204d37757c24297706e8";
+var UPOOL="0x52e65B17fB6E5BA00Ed806f37Afcd2DaA50271Ca";   /* WETH/USDG 0.01% */
+var HPOOL="0x42b19e5e3F28C4148C518444546f102F6ba87aB1";   /* HOOKR/WETH 1%  */
+
+/* THE ASSET LIST IS DISCOVERED, NOT TYPED.
+   The first version carried five hardcoded tokens and silently omitted 119.37
+   PONS -- $29.47, about 9% of the book -- while presenting a total that looked
+   authoritative. safeassets2.js sweeps every token in any pool we have ever
+   touched and proves each route's pair on-chain before trusting it. */
+var CFG={"safe":"0x4F91BeABF6d64648141032A47Efa662Ed852888c","builtAt":"2026-11-01T21:57:01.298Z","assets":[{"addr":"0xeDBf91223639800BCd5756815CAf908Df3b890bE","sym":"PRIORS","dec":18,"supply":"999999915949015500000000000","route":{"kind":"v4priors"},"held":true},{"addr":"0x18E674231A58c239Dc7DaeDcffE15Ec3A24cff5c","sym":"HOOKR","dec":18,"supply":"1000000000000000000000000000","route":{"kind":"v3","pool":"0x42b19e5e3F28C4148C518444546f102F6ba87aB1","tokIs0":false,"quote":"WETH","d0":18,"d1":18},"held":true},{"addr":"0xdEe52F2ab639b6942B0d0F0565400b93b7a0fbe5","sym":"HARMONIC","dec":18,"supply":"1000000000000000000000000000","route":{"kind":"v4","pid":"0xd57d26e798002ce15fda7a17d4a2d0107db0aebe6007ef7ad29c796730b64c81"},"held":true},{"addr":"0x39dBED3a2bd333467115dE45665cC57F813C4571","sym":"PONS","dec":18,"supply":"1000000000000000000000000000","route":{"kind":"v3","pool":"0xf2A0bE59AB76b96f957bd5E5b967F2B75e8dB269","tokIs0":true,"quote":"USDG","d0":18,"d1":6},"held":false},{"addr":"0xCEC185eB182c47d1bA1EFc84e6959e18cd620Be4","sym":"cbBTC","dec":8,"supply":"3087602427","route":{"kind":"v3","pool":"0xD30e44aaE604B42a63f6F9A8109FD0408F35b9fb","tokIs0":false,"quote":"WETH","d0":18,"d1":8},"held":true},{"addr":"0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168","sym":"USDG","dec":6,"supply":"653774745840567","route":{"kind":"stable"},"held":true},{"addr":"0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73","sym":"WETH","dec":18,"supply":"36322760679898910750599","route":{"kind":"v3","pool":"0x52e65B17fB6E5BA00Ed806f37Afcd2DaA50271Ca","tokIs0":true,"quote":"USDG","d0":18,"d1":6},"held":false},{"addr":"0x020bfC650A365f8BB26819deAAbF3E21291018b4","sym":"CASHCAT","dec":18,"supply":"1000000000000000000000000000","route":null,"held":false}]};
+var BASIS={"builtAt":"2026-11-01T22:13:39.233Z","assets":{"HOOKR":{"costUsd":161.2578,"tokens":9437.613466,"avg":0.0170867189,"trades":6},"PRIORS":{"costUsd":89.6693,"tokens":12531.191254,"avg":0.0071556873,"trades":5},"PONS":{"costUsd":40.7224,"tokens":119.371106,"avg":0.3411415836,"trades":2}},"lps":{"1488468":{"deposited":75,"legs":[{"ts":"2026-10-24T03:21:17.978Z","weth":"0.005082511275122795","hookr":"828.297698","usd":25},{"ts":"2026-10-27T05:22:07.293Z","weth":"0.010329197251606839","hookr":"1749.081721","usd":50}]},"undefined":{"deposited":49.55,"legs":[{"usd":49.55}]}}};
+var PALETTE=["#5B8DD9","#C77DD8","#E0A458","#26A69A","#8D96A8","#D9A24A","#7FB069","#D2645F"];
+var ASSETS=CFG.assets.map(function(a,i){
+  return {sym:a.sym,addr:a.addr,dec:a.dec,supply:a.supply,route:a.route,col:PALETTE[i%PALETTE.length]};
+});
+var SEL={bal:"0x70a08231",supply:"0x18160ddd",tokenOfOwner:"0x2f745c59",positions:"0x99fbab88",slot0:"0x3850c7bd",exts:"0x1e2eaeaf",maxPerSwap:"0x795accdf",
+         positions:"0x99fbab88",liquidity:"0x1a686502"};
+function $(i){return document.getElementById(i)}
+function pad(a){return a.replace(/^0x/,"").toLowerCase().padStart(64,"0")}
+function fmtQty(q){
+  if(q===0) return "0";
+  if(q>=1000)  return q.toLocaleString(undefined,{maximumFractionDigits:2});
+  if(q>=1)     return q.toLocaleString(undefined,{maximumFractionDigits:4});
+  if(q>=0.001) return q.toFixed(6);
+  return q.toPrecision(3);
+}
+function mcapFmt(v){
+  if(!v) return "<span class=mut>—</span>";
+  if(v>=1e9) return "$"+(v/1e9).toFixed(2)+"B";
+  if(v>=1e6) return "$"+(v/1e6).toFixed(2)+"M";
+  if(v>=1e3) return "$"+(v/1e3).toFixed(1)+"k";
+  return "$"+v.toFixed(0);
+}
+function usd(v){return "$"+v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
+/* compact dollars for market caps — $4.37M reads, $4,372,118.55 does not */
+function usdc(v){
+  if(!isFinite(v)||v<=0) return "\u2014";
+  if(v>=1e9) return "$"+(v/1e9).toFixed(2)+"B";
+  if(v>=1e6) return "$"+(v/1e6).toFixed(2)+"M";
+  if(v>=1e3) return "$"+(v/1e3).toFixed(1)+"k";
+  return "$"+v.toFixed(0);
+}
+/* tokens with a chart book in THIS deploy — injected by push.sh from the same
+   map chart2 ships with, so the two pages cannot disagree about what charts
+   exist. */
+var CHARTED=["PRIORS", "HOOKR", "HARMONIC", "cbBTC"];
+
+var CHUNK=12,GAP=140;
+function batch(calls){
+  if(!calls.length) return Promise.resolve([]);
+  var out=[],chunks=[],i;
+  for(i=0;i<calls.length;i+=CHUNK) chunks.push(calls.slice(i,i+CHUNK));
+  return chunks.reduce(function(ch,c,ci){
+    return ch.then(function(){return new Promise(function(r){setTimeout(r,ci?GAP:0)})})
+      .then(function(){
+        return fetch(RPC,{method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify(c.map(function(x,j){return {jsonrpc:"2.0",id:ci*CHUNK+j,
+            method:"eth_call",params:[{to:x.to,data:x.data},"latest"]}}))})
+        .then(function(r){return r.json()})
+        .then(function(j){
+          if(!Array.isArray(j)) throw new Error("bad rpc response");
+          j.sort(function(a,b){return a.id-b.id});
+          j.forEach(function(e){out.push(e&&e.error?null:(e?e.result:null))});
+        });
+      });
+  },Promise.resolve()).then(function(){return out});
+}
+function num(h,dec){ if(h==null) return 0; try{return Number(BigInt(h))/Math.pow(10,dec)}catch(e){return 0} }
+
+var FAILS=0,LASTOK=null,PRICE={},SYM={};
+function load(){
+  var calls=[];
+  ASSETS.forEach(function(a){ calls.push({to:a.addr,data:SEL.bal+pad(SAFE)}) });
+  ASSETS.forEach(function(a){ calls.push({to:V3MOD,data:SEL.maxPerSwap+pad(a.addr)}) });
+  ASSETS.forEach(function(a){ calls.push({to:V4MOD,data:SEL.maxPerSwap+pad(a.addr)}) });
+  ASSETS.forEach(function(a){ calls.push({to:a.addr,data:SEL.supply}) });
+  calls.push({to:UPOOL,data:SEL.slot0});                 /* ETH, the numeraire */
+  ASSETS.forEach(function(a){
+    calls.push(a.route&&a.route.kind==="v3" ? {to:a.route.pool,data:SEL.slot0}
+             : a.route&&a.route.kind==="v4priors" ? {to:PM,data:SEL.exts+k64(w256(PRIORS_PID)+w256(6)).slice(2)}
+             : a.route&&a.route.kind==="v4" ? {to:PM,data:SEL.exts+k64(w256(a.route.pid)+w256(6)).slice(2)}
+             : {to:UPOOL,data:SEL.slot0});                 /* placeholder for unpriceable tokens */
+  });
+  return batch(calls).then(function(r){
+    var n=ASSETS.length, i;
+    function sq(hex){ if(!hex) return 0;
+      return Number(BigInt("0x"+hex.replace(/^0x/,"").slice(0,64))&((1n<<160n)-1n))/Math.pow(2,96); }
+    var es=r[4*n];
+    var ETH=0; if(es){ var e=sq(es); ETH=e*e*1e12; }           /* WETH is token0 of UPOOL */
+    /* Each asset is priced from ITS OWN pool, using that pool's orientation
+       and decimals. Nothing is assumed from the symbol. */
+    /* Cleared HERE, before the loop that fills them. The reset was sitting
+       two lines BELOW the loop, so every price was computed correctly and
+       then wiped — the LP card could find no price for its tokens and
+       reported "read failed" for a position that read perfectly. */
+    var price={}; PRICE={}; SYM={};
+    for(i=0;i<n;i++){
+      var A=ASSETS[i], hex=r[4*n+1+i], rt=A.route, v=0;
+      if(!rt){ price[A.sym]=0; continue; }
+      if(rt.kind==="stable") v=1;
+      else if(rt.kind==="v4priors"||rt.kind==="v4"){
+        if(hex){ var pr=Number(BigInt(hex)&((1n<<160n)-1n))/Math.pow(2,96); v=1e12/(pr*pr); }
+      } else if(rt.kind==="v3" && hex){
+        var s=sq(hex);
+        var rawPx=s*s*Math.pow(10,rt.d0-rt.d1);                /* token1 per token0 */
+        var q = rt.quote==="WETH" ? ETH : 1;
+        v = (rt.tokIs0 ? rawPx : 1/rawPx) * q;
+      }
+      price[A.sym]=isFinite(v)?v:0; PRICE[A.addr.toLowerCase()]=price[A.sym]; SYM[A.addr.toLowerCase()]=A.sym;
+    }
+    var rows=[],tot=0;
+    for(i=0;i<n;i++){
+      var a=ASSETS[i];
+      var qty=num(r[i],a.dec);
+      var m3=r[n+i], m4=r[2*n+i];
+      var cap=0; try{ cap=Number(BigInt(m3||"0x0"))+Number(BigInt(m4||"0x0")); }catch(e){}
+      var v=qty*(price[a.sym]||0);
+      tot+=v;
+      /* MARKET CAP IS ON TOTAL SUPPLY, and the page says so. Circulating
+         supply is not an on-chain fact -- it depends on which holders you
+         decide to exclude, which no contract records. Reporting a total-supply
+         figure AS circulating would be a label that is not its content. */
+      var sup=num(a.supply!=null?("0x"+BigInt(a.supply).toString(16)):r[3*n+i],a.dec);
+      /* P&L is computed PER TOKEN from the average cost, not by allocating a
+         dollar basis across spot and LP — that sidesteps which tokens went
+         into the band. "partial" flags an asset whose logged trades cover
+         materially less than what is held: PRIORS basis covers 17% of the
+         position, and showing that average unqualified would be a confident
+         wrong number. */
+      var bs=(BASIS&&BASIS.assets&&BASIS.assets[a.sym])||null;
+      var avg=bs?bs.avg:null;
+      var cov=bs&&qty>0?bs.tokens/qty:0;
+      rows.push({a:a,qty:qty,px:price[a.sym]||0,v:v,cap:cap,sup:sup,mcap:sup*(price[a.sym]||0),
+        avg:avg,
+        pnl:avg?qty*((price[a.sym]||0)-avg):0,
+        pnlPct:avg?(((price[a.sym]||0)/avg-1)*100):0,
+        partial:bs?cov<0.9:false, covered:cov});
+    }
+    /* FILTER ON THE LIVE BALANCE, not the build-time snapshot. PONS and WETH
+       both went to zero after the config was baked and the page kept listing
+       them. A holdings page that shows a position you no longer have is the
+       same class of error as omitting one you do. */
+    rows=rows.filter(function(x){return x.qty>0});
+    rows.sort(function(x,y){return y.v-x.v});
+    $("tot").textContent=usd(tot);
+    $("totsub").textContent=rows.filter(function(x){return x.qty>0}).length+" assets held";
+    $("rows").innerHTML=rows.map(function(x){
+      if(x.qty<=0) return "";
+      var held=!(x.cap>0);
+      var pl = x.avg
+        ? "<span class='"+(x.pnl>0?"up":x.pnl<0?"dn":"mut")+"'>"+(x.pnl>=0?"+":"")+usd(x.pnl)+
+          "  "+(x.pnlPct>=0?"+":"")+x.pnlPct.toFixed(1)+"%</span>"+
+          (x.partial?" <span class='wn' title='logged trades cover "+(x.covered*100).toFixed(0)+"% of the position'>*</span>":"")
+        : "<span class='mut'>no basis on record</span>";
+      /* An asset with a shipped chart book links to its terminal. CHARTED is
+         injected from the SAME map chart2 is built with, so a dead chart link
+         cannot ship — if the book build fails, the link never renders. */
+      var chart=CHARTED.indexOf(x.a.sym)>=0;
+      var open=chart?"<a class='ac go' href='/chart2/?t="+x.a.sym+"'>":"<div class='ac'>";
+      var close=chart?"</a>":"</div>";
+      /* Total-supply cap, and the label says so: circulating supply is not an
+         on-chain fact — it depends on which holders you exclude, which no
+         contract records. Calling this "market cap" unqualified would be a
+         label that is not its content. */
+      var mc=x.mcap>0&&x.px>0
+        ? "<div class='mcl'>mcap "+usdc(x.mcap)+" <span class='mut'>on total supply</span></div>"
+        : "";
+      return open+
+        "<div class='nm'><span class='sw' style='background:"+x.a.col+"'></span>"+x.a.sym+
+          " <span class='wt'>"+(tot?(x.v/tot*100).toFixed(1):"0.0")+"%</span>"+
+          (held?" <span class='pill hold'>held</span>":"")+
+          (chart?" <span class='chlnk'>chart &rsaquo;</span>":"")+"</div>"+
+        "<div class='vl'>"+usd(x.v)+"</div>"+
+        "<div class='sub'>"+fmtQty(x.qty)+" @ $"+x.px.toFixed(x.px>100?2:6)+
+          (x.avg?"   <span class='mut'>cost $"+x.avg.toFixed(x.avg>100?2:6)+"</span>":"")+"</div>"+
+        mc+
+        "<div class='pl'>"+pl+"</div>"+
+      close;
+    }).join("")||"<div class='row'><span class='mut'>the Safe holds nothing</span><span></span></div>";
+    $("bar").innerHTML=rows.filter(function(x){return x.v>0}).map(function(x){
+      return "<i style='width:"+(x.v/tot*100)+"%;background:"+x.a.col+"'></i>"}).join("");
+    $("key").innerHTML=rows.filter(function(x){return x.v>0}).map(function(x){
+      return "<span><span class='sw' style='background:"+x.a.col+"'></span>"+x.a.sym+
+             " <b>"+(x.v/tot*100).toFixed(1)+"%</b></span>"}).join("");
+    $("alloccnt").textContent=usd(tot)+" total";
+    var pnlTot=0, basisTot=0, anyPartial=false;
+    rows.forEach(function(x){ if(x.avg){ pnlTot+=x.pnl; basisTot+=x.qty*x.avg; if(x.partial) anyPartial=true; } });
+    $("heropl").innerHTML = basisTot>0
+      ? "<span class='"+(pnlTot>=0?"up":"dn")+"'>"+(pnlTot>=0?"+":"")+usd(pnlTot)+"  "+
+        (pnlTot>=0?"+":"")+(pnlTot/basisTot*100).toFixed(1)+"%</span> <span class='mut'>unrealised</span>"
+      : "";
+    /* One short line instead of three paragraphs. The asterisk still needs
+       explaining or it is just noise, but it needs a sentence, not an essay. */
+    $("foot").innerHTML = anyPartial
+      ? "<span class='wn'>*</span> cost basis covers only trades made through this system &mdash; PRIORS mostly predates it."
+      : "";
+    $("px").innerHTML=ASSETS.map(function(a){
+      var v=price[a.sym];
+      return "<div class='row'><span><span class='sw' style='background:"+a.col+"'></span>"+a.sym+
+        (a.route?" <span class='mut'>via "+(a.route.kind==="stable"?"peg":(a.route.kind==="v4priors"||a.route.kind==="v4")?"V4 PoolManager":a.route.quote)+"</span>":"")+
+        "</span><span>"+(v?"$"+v.toFixed(v>100?2:8):"<span class=mut>no USD route</span>")+"</span></div>";
+    }).join("")+"<div class='row'><span>ETH / USDG <span class='mut'>numeraire</span></span><span>"+(ETH?"$"+ETH.toFixed(2):"—")+"</span></div>";
+    var d=new Date();
+    $("stamp").textContent="live · "+("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2)+":"+("0"+d.getSeconds()).slice(-2);
+    $("dot").className="dot"; FAILS=0; LASTOK=Date.now();
+    return loadLP(tot);
+  }).catch(function(e){
+    /* keep the last good read on screen; a stale number with an honest age
+       beats a page that blanks itself on one throttled batch */
+    FAILS++;
+    $("dot").className=FAILS>2?"dot bad":"dot stale";
+    $("stamp").textContent=LASTOK
+      ? "last good read "+Math.round((Date.now()-LASTOK)/1000)+"s ago · retrying"
+      : "read failed: "+((e&&e.message)||e);
+  });
+}
+
+/* LP POSITIONS, ENUMERATED FROM THE CHAIN.
+   The audit found the page reporting $285.60 when the Safe held $334.06 — it
+   counted spot only and ignored a live $48.46 LP. Positions are now walked
+   from the position manager itself (balanceOf -> tokenOfOwnerByIndex ->
+   positions), so a band shows up whether or not any local file remembers it,
+   and closed ones (liquidity 0) drop out on their own.
+
+   Valuation needs no extra pool read: for a v3 position the raw price is
+   p = (usd0/usd1) * 10^(d1-d0), and both token prices are already on screen. */
+function loadLP(total){
+  /* NOT `usd` — that is the currency formatter declared at module scope, and
+     shadowing it here made the very last line of this function throw "usd is
+     not a function". The valuation above it was correct the whole time; the
+     catch turned a working $48.06 into "read failed". */
+  var dec={};
+  ASSETS.forEach(function(a){ dec[a.addr.toLowerCase()]=a.dec; });
+  return batch([{to:NPM,data:SEL.bal+pad(SAFE)}]).then(function(r){
+    var n=0; try{ n=Number(BigInt(r[0]||"0x0")); }catch(e){}
+    if(!n){ $("lp").innerHTML="<div class='row'><span>open positions</span><span class='mut'>none</span></div>";
+            $("lpcnt").textContent="0 open"; return 0; }
+    var calls=[];
+    for(var i=0;i<n;i++) calls.push({to:NPM,data:SEL.tokenOfOwner+pad(SAFE)+i.toString(16).padStart(64,"0")});
+    return batch(calls).then(function(ids){
+      var good=ids.filter(function(x){return x!=null});
+      return batch(good.map(function(id){
+        return {to:NPM,data:SEL.positions+id.replace(/^0x/,"").padStart(64,"0")};
+      })).then(function(ps){
+        var open=[], lpTotal=0;
+        ps.forEach(function(hex,k){
+          if(!hex) return;
+          var d=hex.replace(/^0x/,"");
+          var W=function(j){return d.slice(j*64,(j+1)*64)};
+          var t0="0x"+W(2).slice(24), t1="0x"+W(3).slice(24);
+          var tl=Number(BigInt.asIntN(24,BigInt("0x"+W(5))));
+          var tu=Number(BigInt.asIntN(24,BigInt("0x"+W(6))));
+          var L=Number(BigInt("0x"+W(7)));
+          if(!L) return;                                   /* closed */
+          var d0=dec[t0.toLowerCase()], d1=dec[t1.toLowerCase()];
+          var p0=PRICE[t0.toLowerCase()], p1=PRICE[t1.toLowerCase()];
+          var id=BigInt(good[k]).toString();
+          if(d0==null||d1==null||!p0||!p1){
+            open.push({n:"#"+id,v:"<span class='wn'>held, not priceable here</span>"});
+            return;
+          }
+          var praw=(p0/p1)*Math.pow(10,d1-d0);
+          var sc=Math.sqrt(praw), sa=Math.pow(1.0001,tl/2), sb=Math.pow(1.0001,tu/2);
+          var s=Math.min(Math.max(sc,sa),sb);
+          var a0=L*(1/s-1/sb)/Math.pow(10,d0), a1=L*(s-sa)/Math.pow(10,d1);
+          var v=a0*p0+a1*p1;
+          lpTotal+=v;
+          var inR=sc>sa&&sc<sb;
+          var dep=(BASIS&&BASIS.lps&&BASIS.lps[id])?BASIS.lps[id].deposited:null;
+          var lpPnl=dep?(v-dep):null;
+          open.push({n:"#"+id+" <span class='mut'>"+SYM[t0.toLowerCase()]+"/"+SYM[t1.toLowerCase()]+"</span>"+
+              (dep?" <span class='mut'>&middot; deposited "+usd(dep)+"</span>":""),
+            v:usd(v)+(lpPnl!==null?" <span class='"+(lpPnl>=0?"up":"dn")+"'>"+(lpPnl>=0?"+":"")+usd(lpPnl)+"</span>":"")+
+              " <span class='"+(inR?"up":"wn")+"'>"+(inR?"in range":"out of range")+"</span>"});
+        });
+        $("lp").innerHTML = open.length
+          ? open.map(function(o){return "<div class='row'><span>"+o.n+"</span><span>"+o.v+"</span></div>"}).join("")
+            + "<div class='row'><span><b>LP subtotal</b></span><span><b>"+usd(lpTotal)+"</b></span></div>"
+          : "<div class='row'><span>open positions</span><span class='mut'>none &mdash; all capital is spot</span></div>";
+        $("lpcnt").textContent=open.length+" open of "+n+" ever minted";
+        if(lpTotal>0){
+          $("tot").textContent=usd(total+lpTotal);
+          $("totsub").textContent=usd(total)+" spot + "+usd(lpTotal)+" in LPs";
+        }
+        return lpTotal;
+      });
+    });
+  }).catch(function(){
+    $("lp").innerHTML="<div class='row'><span>open positions</span><span class='wn'>read failed</span></div>";
+    return 0;
+  });
+}
+
+load(); setInterval(load,12000);
+</script>
+</body>
+</html>

@@ -1,0 +1,698 @@
+<title>PRIORS LP Status</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!--
+  LIVE VIEW OF THE SAFE'S UNISWAP V4 PRIORS/USDG POSITION.
+  Rebuilt 2026-10-15 on his instruction: "make it easier to read how far it is
+  in range". The first version drew a fill and a marker at the same x, which
+  reads as a progress bar and answers nothing. The question this page exists to
+  answer is "how much can PRIORS move before this stops earning", so that is
+  now the headline and everything else is subordinate to it.
+
+  ── WHY UNISWAP CANNOT SHOW THIS POSITION ──
+  Our V3 positions were linkable (app.uniswap.org/positions/v3/robinhood/<id>)
+  because they were ERC-721s with a tokenId. ScopedExecutorV4 calls
+  PoolManager.modifyLiquidity DIRECTLY, so this position is a storage row keyed
+  by (owner=module, tickLower, tickUpper, salt=0). No NFT, no tokenId, nothing
+  for Uniswap's UI to key on. That is the same property that stops the module
+  sending funds anywhere.
+
+  ── WHY THE STORAGE SLOTS ARE HARDCODED ──
+  Reading a V4 position needs keccak256 to derive slots. Shipping a hashing
+  library to recompute CONSTANTS would be silly: the slots never change, only
+  the values at them do. Derived once off-chain; every figure here is read live
+  via extsload (0x1e2eaeaf) at those slots.
+
+  ── THE BAR IS LINEAR IN PRICE, LIQUIDITY IS NOT ──
+  Liquidity lives in sqrt-price space, so the needle's position is an
+  orientation device. The PERCENTAGES are exact; the pixel offset is not.
+-->
+<style>
+:root{
+  --bg:#f4f6f7; --panel:#fff; --sunk:#eceff1; --line:#d7dde1; --ink:#15191d;
+  --dim:#5d6873; --faint:#8b949e;
+  --accent:#0f6b5c; --ok:#18794e; --warn:#9a6700; --bad:#b32d2d;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#101417; --panel:#181d21; --sunk:#0b0e10; --line:#2a3137; --ink:#e9edf0;
+  --dim:#97a1aa; --faint:#6d777f;
+  --accent:#4ec3a8; --ok:#4cc585; --warn:#e0b64b; --bad:#f07070;}}
+:root[data-theme="dark"]{
+  --bg:#101417; --panel:#181d21; --sunk:#0b0e10; --line:#2a3137; --ink:#e9edf0;
+  --dim:#97a1aa; --faint:#6d777f;
+  --accent:#4ec3a8; --ok:#4cc585; --warn:#e0b64b; --bad:#f07070;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+  font-size:16px;line-height:1.5;-webkit-text-size-adjust:100%}
+.wrap{max-width:620px;margin:0 auto;padding:22px 16px 64px}
+header{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:16px}
+h1{font-size:1.22rem;margin:0;letter-spacing:-.01em}
+.stamp{font-family:var(--mono);font-size:.72rem;color:var(--faint);white-space:nowrap}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:16px;margin:0 0 12px}
+.lbl{font-size:.68rem;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);
+  font-weight:600;margin:0 0 12px}
+
+/* ── the headline: can it still earn, and how much room is left ── */
+.status{display:flex;align-items:center;gap:10px;margin:0 0 4px}
+.dot{width:10px;height:10px;border-radius:50%;flex:none;background:var(--ok)}
+.dot.warn{background:var(--warn)} .dot.bad{background:var(--bad)}
+.state{font-size:1.05rem;font-weight:650;letter-spacing:-.01em}
+.room{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px 0 0}
+.room div{background:var(--sunk);border:1px solid var(--line);border-radius:9px;padding:11px 12px}
+.room .k{font-size:.68rem;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);font-weight:600}
+.room .v{font-family:var(--mono);font-size:1.6rem;font-variant-numeric:tabular-nums;
+  letter-spacing:-.03em;line-height:1.15;margin-top:3px}
+.room .s{font-family:var(--mono);font-size:.74rem;color:var(--faint);margin-top:1px}
+.room .down .v{color:var(--bad)} .room .up .v{color:var(--accent)}
+
+/* ── the track ── */
+.track{position:relative;height:44px;margin:20px 0 0;background:var(--sunk);
+  border:1px solid var(--line);border-radius:8px;overflow:hidden}
+/* outer fifths are where the position is close to going idle */
+.track .edge{position:absolute;top:0;bottom:0;width:20%;
+  background:repeating-linear-gradient(135deg,transparent,transparent 5px,
+    color-mix(in srgb,var(--bad) 13%,transparent) 5px,
+    color-mix(in srgb,var(--bad) 13%,transparent) 10px)}
+.track .edge.l{left:0} .track .edge.r{right:0}
+.track .needle{position:absolute;top:0;bottom:0;width:3px;background:var(--accent);
+  box-shadow:0 0 0 1px var(--panel)}
+.track .needle::after{content:"";position:absolute;left:50%;top:-1px;
+  transform:translateX(-50%);width:9px;height:9px;background:var(--accent);
+  border-radius:0 0 2px 2px;clip-path:polygon(0 0,100% 0,50% 100%)}
+.ticks{display:flex;justify-content:space-between;margin-top:6px;
+  font-family:var(--mono);font-size:.73rem;color:var(--faint)}
+.caption{font-size:.84rem;color:var(--dim);margin:11px 0 0}
+.here{font-family:var(--mono);font-size:.78rem;color:var(--accent);
+  text-align:center;margin:9px 0 0;font-variant-numeric:tabular-nums}
+
+.row{display:flex;justify-content:space-between;gap:12px;padding:7px 0;
+  border-bottom:1px solid var(--line);font-size:.93rem}
+.row:last-child{border-bottom:0}
+.row span:first-child{color:var(--dim)}
+.row span:last-child{font-family:var(--mono);text-align:right;
+  font-variant-numeric:tabular-nums;word-break:break-word}
+.big{font-family:var(--mono);font-size:2rem;font-variant-numeric:tabular-nums;
+  letter-spacing:-.03em;line-height:1.1}
+.pnl{font-family:var(--mono);font-size:1.15rem;font-variant-numeric:tabular-nums;
+  letter-spacing:-.02em;margin-top:5px;font-weight:650}
+.pnl.pos{color:var(--ok)} .pnl.neg{color:var(--bad)} .pnl.flat{color:var(--dim)}
+.delta{font-family:var(--mono);font-size:.8rem;color:var(--faint);margin-top:3px}
+.note{font-size:.8rem;color:var(--faint);margin:11px 0 0}
+.duo{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.duo>div{background:var(--sunk);border:1px solid var(--line);border-radius:9px;padding:12px 13px}
+.duo .k{font-size:.66rem;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);
+  font-weight:600;line-height:1.35;min-height:2.7em}
+.duo .s{font-family:var(--mono);font-size:.72rem;color:var(--faint);margin-top:2px}
+.duo .v{font-family:var(--mono);font-size:1.55rem;font-variant-numeric:tabular-nums;
+  letter-spacing:-.03em;line-height:1.15;margin-top:3px}
+.duo .v.pos{color:var(--ok)} .duo .v.neg{color:var(--bad)} .duo .v.flat{color:var(--dim)}
+.eq{font-family:var(--mono);font-size:.78rem;color:var(--faint);margin:10px 0 0;
+  text-align:center;line-height:1.5}
+@media (max-width:420px){.duo .k{min-height:0} .duo{grid-template-columns:1fr}}
+.row b{color:var(--ink);font-weight:650}
+a{color:var(--accent)}
+.msg{font-size:.86rem;margin-top:11px;padding:9px 11px;border-radius:7px;
+  border:1px solid var(--bad);color:var(--bad);background:var(--sunk)}
+em{font-style:normal;color:var(--faint)}
+.hero{border:1px solid var(--accent);border-radius:11px;padding:15px 16px;
+  background:color-mix(in srgb, var(--accent) 7%, transparent)}
+.hero .k{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);font-weight:600}
+.hero .v{font-family:var(--mono);font-size:40px;line-height:1.1;margin-top:4px;
+  font-variant-numeric:tabular-nums;color:var(--accent)}
+.hero .s{font-size:13px;color:var(--dim);margin-top:5px}
+.rangehero{display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center;
+  background:var(--sunk);border:1px solid var(--line);border-radius:10px;
+  padding:14px 12px;margin:0 0 14px}
+.rangehero .ek{font-size:.62rem;text-transform:uppercase;letter-spacing:.09em;
+  color:var(--dim);font-weight:600;text-align:center}
+.rangehero .ev{font-family:var(--mono);font-size:1.15rem;font-variant-numeric:tabular-nums;
+  text-align:center;margin-top:3px;letter-spacing:-.02em}
+.rangehero .ev.now{font-size:1.5rem;color:var(--accent);font-weight:650}
+.rangehero .es{font-family:var(--mono);font-size:.68rem;color:var(--faint);
+  text-align:center;margin-top:2px}
+.rangehero .mid{padding:0 6px;border-left:1px solid var(--line);border-right:1px solid var(--line)}
+@media (max-width:420px){.rangehero{grid-template-columns:1fr;gap:8px}
+  .rangehero .mid{border:0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:8px 0}}
+</style>
+
+<div class="wrap">
+<header>
+  <h1>PRIORS / USDG&nbsp;1%</h1>
+  <span class="stamp" id="stamp">reading…</span>
+</header>
+
+<!-- CLOSED-POSITION BANNER. This page had NO zero-liquidity state: with the
+     position closed it still drew a range, a needle and "OUT OF RANGE" next to
+     zeros, which reads as an open LP that has drifted out of band. On 10-17 it
+     made him ask whether a new LP had been opened. A page about a position must
+     say, first and before anything else, whether the position exists. -->
+<div class="card" id="closed-card" hidden
+     style="border-color:var(--warn);background:var(--sunk)">
+  <p class="lbl" style="color:var(--warn)">No position open</p>
+  <p style="margin:2px 0 0;font-size:1.02rem;line-height:1.45">
+    On-chain liquidity for this band is <b>zero</b>. There is <b>no LP</b>.
+    Everything below describes the <em>last band held</em>, kept for the record —
+    it is history, not a live position.
+  </p>
+  <p class="note" style="margin-top:9px" id="closed-sub"></p>
+</div>
+
+<div class="card">
+  <p class="lbl">Range</p>
+  <!-- THE RANGE, STATED PLAINLY AND FIRST. His instruction 2026-10-19: "make it
+       obvious what the range is on the site that we have". The two band prices
+       were only legible as small tick labels under the track, so the single
+       most-asked question — what IS the range — was the least prominent thing
+       on a page about it. Now it leads, with spot between the two edges so the
+       position inside the band reads without interpreting a needle. -->
+  <div class="rangehero">
+    <div class="edgev"><div class="ek">low edge</div><div class="ev" id="rh-lo">—</div></div>
+    <div class="mid"><div class="ek">PRIORS now</div><div class="ev now" id="rh-px">—</div><div class="es" id="rh-state">—</div></div>
+    <div class="edgev"><div class="ek">high edge</div><div class="ev" id="rh-hi">—</div></div>
+  </div>
+  <div class="status"><span class="dot" id="dot"></span><span class="state" id="state">reading…</span></div>
+
+  <div class="room">
+    <div class="down"><div class="k">Falls to idle</div><div class="v" id="r-dn">—</div><div class="s" id="r-dnp">—</div></div>
+    <div class="up"><div class="k">Rises to idle</div><div class="v" id="r-up">—</div><div class="s" id="r-upp">—</div></div>
+  </div>
+
+  <div class="track"><div class="edge l"></div><div class="edge r"></div><div class="needle" id="needle"></div></div>
+  <div class="ticks"><span id="t-lo">—</span><span id="t-hi">—</span></div>
+  <div class="here" id="here">—</div>
+  <p class="caption" id="caption"></p>
+</div>
+
+<div class="card">
+  <p class="lbl">Position</p>
+  <div class="big" id="val">—</div>
+  <!-- The position's OWN P&L, stated as a number and a percent rather than
+       buried in grey context text. This is value-vs-capital-deployed: it
+       includes the PRIORS price move, which is why the LP-vs-holding figure
+       in the P&L card below exists as a separate, different question. -->
+  <div class="pnl" id="valpnl">—</div>
+  <div class="delta" id="valdelta">—</div>
+  <div style="margin-top:12px">
+    <div class="row"><span>deployed at mint</span><span id="p-dep2">—</span></div>
+    <div class="row"><span>holds</span><span id="holds">—</span></div>
+    <div class="row"><span>fees uncollected</span><span id="fees">—</span></div>
+    <div class="row"><span>share of in-range liquidity</span><span id="share">—</span></div>
+  </div>
+  <div id="err" class="msg" style="display:none"></div>
+</div>
+
+<div class="card">
+  <p class="lbl">Performance</p>
+  <!-- The headline is LP-vs-HOLD, not vs-deployed. Vs-deployed mostly measures
+       which way PRIORS went, which the LP did not choose and is not judged on.
+       Fees minus divergence is the whole of the LP's contribution, so both
+       components are shown rather than only their sum. -->
+  <!-- TWO numbers, both big, both labelled. The previous layout put ONE big
+       number under the heading "P&L" and it was LP-vs-hold; he read it as the
+       fee figure and concluded fees had dropped from $0.22 to $0.08 — i.e.
+       that I had compounded. A single unlabelled hero under an ambiguous
+       heading invites exactly that. Fees and edge now sit side by side with
+       the arithmetic that links them spelled out underneath. -->
+  <!-- PROFIT FIRST. This card was titled "P&L" with the OPPORTUNITY COST as
+       its hero number, so a -$19 comparison read as a $19 loss while the
+       actual position was +$5. Two numbers of the same size and opposite sign,
+       one of them mislabelled. Actual profit now leads; the comparison is
+       explicitly named as an opportunity cost and sits second. -->
+  <!-- FEES LEAD. His instruction 2026-10-18: "I want a simple way to see the
+       fees accrued for the lp that is open". Fees were a one-line row in small
+       type UNDER two cards he had not asked for, so the number the LP exists
+       to produce was the hardest one on the page to find. The two comparison
+       metrics stay — they are useful — but they move below the thing being
+       asked for. -->
+  <div class="hero">
+    <div class="k">Fees earned <em>— this LP, since it opened</em></div>
+    <div class="v" id="p-feeshero">—</div>
+    <div class="s" id="p-feeherosub">—</div>
+  </div>
+  <div class="duo" style="margin-top:12px">
+    <!-- THESE TWO BOXES USED TO BE "Your profit" and "Opportunity cost", and he
+         said: "I have no idea what those mean besides the fees". He was right
+         to. "Your profit -$1.95" was mostly PRIORS falling 2% — it reported
+         which way the token went, not whether the LP was working. Meanwhile
+         the number that DOES answer that (+$0.62 vs holding the same tokens)
+         appeared nowhere on the page.
+         They now split the same -$1.95 into its two real causes, and the two
+         boxes ADD UP to it exactly:  price move + what the LP did = profit. -->
+    <div><div class="k">PRIORS price moved <em>— not the LP</em></div><div class="v" id="p-price">—</div><div class="s" id="p-pricesub">—</div></div>
+    <div><div class="k">What the LP added <em>— vs just holding</em></div><div class="v" id="p-edge">—</div><div class="s" id="p-edgesub">fees, minus what the band gave up</div></div>
+  </div>
+  <div class="row" style="border:0;padding-top:10px"><span>fees accruing now</span><span id="p-feesbig">—</span></div>
+  <p class="eq" id="p-parts">—</p>
+  <div style="margin-top:13px">
+    <div class="row"><span>deployed at mint</span><span id="p-dep">—</span></div>
+    <div class="row"><span>position now</span><span id="p-now">—</span></div>
+    <div class="row"><span>fees accruing now</span><span id="p-fees">—</span></div>
+    <div class="row" id="r-comp"><span>fees banked earlier</span><span id="p-comp">—</span></div>
+    <div class="row"><span><b>total now</b></span><span id="p-tot">—</span></div>
+    <div class="row"><span>vs deployed <em>— includes the PRIORS move</em></span><span id="p-vsdep">—</span></div>
+    <div class="row"><span>if it had bought PRIORS instead</span><span id="p-hold">—</span></div>
+    <div class="row"><span>fee rate <em>— observed, not projected</em></span><span id="p-rate">—</span></div>
+    <div class="row"><span>age</span><span id="p-age">—</span></div>
+  </div>
+  <p class="note" id="p-warn"></p>
+</div>
+
+<div class="card">
+  <p class="lbl">Held outside the LP</p>
+  <div class="row"><span>spot PRIORS <em>— hold-only</em></span><span id="spot">—</span></div>
+  <div class="row"><span>idle USDG</span><span id="idle">—</span></div>
+</div>
+
+<div class="card">
+  <p class="lbl">On chain</p>
+  <div class="row"><span>mint tx</span><span><a id="l-mint" href="#">0x2eabdbf1…</a></span></div>
+  <div class="row"><span>swap tx</span><span><a id="l-swap" href="#">0x3c2a3562…</a></span></div>
+  <div class="row"><span>the pool</span><span><a id="l-pool" href="#">Uniswap ↗</a></span></div>
+  <div class="row"><span>module</span><span><a id="l-mod" href="#">0xa20660…</a></span></div>
+  <p class="note">No Uniswap position link exists for this one — it has no ERC-721 tokenId. The module calls the PoolManager directly, so the position is owned by the module rather than minted through the PositionManager. Same reason the module cannot send funds anywhere.</p>
+</div>
+</div>
+
+<script>
+"use strict";
+const RPC="https://rpc.mainnet.chain.robinhood.com";
+const PM ="0x8366a39cc670b4001a1121b8f6a443a643e40951";
+const SAFE="0x4F91BeABF6d64648141032A47Efa662Ed852888c";
+const PRIORS="0xeDBf91223639800BCd5756815CAf908Df3b890bE";
+const USDG="0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
+const MODADDR="0xa20660ABf6e07D6607d7C3aaDAee6E745EDBBE5E";
+const EXP="https://robin.etherscan.io";
+const PID="0x9be7ab27227e115085b0949a819a73f6963ddc6da0c6204d37757c24297706e8";
+const TX_MINT="0x2eabdbf134a4de8eefa25f9cb92ff2d35b755029ed0318669d6b84acaba390a4";
+const TX_SWAP="0x3c2a35625dc4218d84c650cc00e2702ef0d56c988eeabec2f69452a2fca8821e";
+/* ── THE BAND IS INJECTED AT DEPLOY TIME, NOT HARDCODED HERE ──
+   This page used to carry its own `const T_LO=320900, T_HI=325900` and its own
+   eleven keccak storage slots, as did lpstatus4.js, rangewatch4.js and
+   compound4.js -- four copies of one fact. When the band was closed on
+   2026-10-17 all four kept reading the dead one, and this page went on drawing
+   a range, a needle and "OUT OF RANGE" beside zeros, which reads as an open LP
+   that drifted. push.sh now fills {"live":false,"closedAt":"2026-10-22T20:25:29.781Z","note":"his instruction: \"Close the band\". tx 0x84ca6a8858a9fc7af9d078fb07dba746d1d758baaed36567491268de826a0c70 — released 0.0812 USDG + 3562.14 PRIORS to spot. NOT converted."} from agent-safe/lp-band.json via
+   band.js, so the website cannot disagree with the watchers about which band
+   is live -- there is only one record to disagree with. */
+const BAND={"live":false,"closedAt":"2026-10-22T20:25:29.781Z","note":"his instruction: \"Close the band\". tx 0x84ca6a8858a9fc7af9d078fb07dba746d1d758baaed36567491268de826a0c70 — released 0.0812 USDG + 3562.14 PRIORS to spot. NOT converted."};
+const LIVE=!!(BAND&&BAND.live);
+const T_LO=LIVE?BAND.tickLower:0, T_HI=LIVE?BAND.tickUpper:0;
+/* MINT BASELINE. The deposited amounts are NOT hardcoded as the rounded
+   figures the mint logged ("19.56 USDG + 6555.86 PRIORS"); they are recomputed
+   from the minted liquidity and the price at mint, which is exact and
+   self-consistent. That only holds while the position is untouched, so if the
+   on-chain L ever differs from MINT_L the page says the baseline is stale
+   instead of quietly scoring against the wrong deposit. */
+/* Fees already compounded are liquidity now, not "uncollected", so reading
+   only the uncollected figure reports ~$0 the moment a compound runs and the
+   lifetime income silently disappears. Injected at deploy time from
+   compound4-state.json by push.sh, so it cannot drift by more than one
+   hourly refresh. */
+/* LIFETIME FEES FROM THE APPEND-ONLY LEDGER, injected at deploy time.
+   Previously this carried only the compounder's running total, which resets
+   when a band closes or capital is added -- so the counter dropped to zero
+   after the roll and again after the 2026-10-17 addition, erasing income that
+   had really been earned. The ledger never resets. */
+const BANKED_FEES=20.846623;
+/* THE TWO CAPITAL INJECTIONS, with the PRIORS price at each moment. These make
+   a hold counterfactual computable again. I had set the LP-vs-hold tile to
+   "n/a" after the addition because there was no single entry point -- true, but
+   a cop-out: the right counterfactual is the WEIGHTED one, "what if each
+   injection had bought PRIORS at the price ruling when it went in".
+   NOTE: BANKED_FEES is already INSIDE the position value (every dollar was
+   compounded or absorbed back into principal). It must never be added on top
+   of it -- doing so double-counts and overstates the LP by ~$7. */
+/* INJECTIONS WAS HARDCODED TO A CLOSED BAND'S LINEAGE: [{usd:59.61,
+   px:0.00932898}] -- the 2026-10-17 centred band. After the one-sided band was
+   opened and twice re-ranged, the live position was $34.38, but this card went
+   on asking "what if $59.61 had bought PRIORS at $0.00932898", valued that at
+   $79.65, subtracted the $34.38 position and displayed "-$45.27".
+
+   Almost all of that gap is simply that $59.61 is not $34.38. It compared
+   different AMOUNTS OF MONEY and presented the difference as an opportunity
+   cost. The honest comparison for the live band is -$0.02.
+
+   Both numbers now come from the band record, so the counterfactual is always
+   "this money, at the price when THIS band was minted". */
+const INJECTIONS = (LIVE && BAND.deployedUsd>0 && BAND.pxAtMint>0)
+  ? [{usd:BAND.deployedUsd, px:BAND.pxAtMint}]
+  : [];
+const COMPOUND_RUNS=0;
+const LAST_COMPOUND="never";
+const PX_AT_MINT=LIVE?(BAND.pxAtMint||0):0;
+const MINT_TS=LIVE?Date.parse(BAND.openedAt):Date.now();
+/* DEPLOYED CAPITAL IS EXPLICIT, NOT DERIVED FROM LIQUIDITY. Deriving it as
+   f(MINT_L, PX_AT_MINT) describes a position minted in ONE transaction; after
+   the 2026-10-17 addition it printed "deployed $111.40" against a $124.84
+   position and invented +$13.43 of P&L. Cumulative external capital:
+   $63.36 (band 1, first SEND half-sale) + $55.85 (2026-10-17 addition).
+   Fees are returns, not capital, so they are excluded. */
+const DEPLOYED_USD=LIVE?BAND.deployedUsd:0;
+const MINT_L=LIVE&&BAND.L?BigInt(BAND.L):0n;
+const S=(LIVE&&BAND.slots)?BAND.slots:{};
+
+const $=id=>document.getElementById(id);
+const M=1n<<256n;
+const usdOf=t=>1e12/Math.pow(1.0001,t);
+const money=n=>(n<0?"-$":"$")+Math.abs(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+/* A freshly minted position earns fractions of a cent, and money() rounds to
+   two places — so real, correctly-computed fees rendered as "$0.00" and read
+   as a broken counter. Small amounts get the precision they need. */
+const fee$=n=>n===0?"$0.0000":Math.abs(n)<0.01?("$"+n.toFixed(4)):money(n);
+const num=(n,d)=>n.toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d});
+
+let rid=0;
+async function call(to,data){
+  const r=await fetch(RPC,{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({jsonrpc:"2.0",id:++rid,method:"eth_call",params:[{to,data},"latest"]})});
+  const j=await r.json();
+  if(j.error) throw new Error(j.error.message);
+  return j.result;
+}
+const slot=async s=>BigInt(await call(PM,"0x1e2eaeaf"+s.slice(2)));
+const bal =async t=>BigInt(await call(t,"0x70a08231"+SAFE.slice(2).toLowerCase().padStart(64,"0")));
+
+async function load(){
+ try{
+  /* NO BAND ON RECORD: there are no position slots to read, so reading must
+     not even be attempted -- S is {} and slot(undefined) would surface as
+     "Could not read the chain", blaming the RPC for a position that simply
+     does not exist. Show the closed state and stop. */
+  if(!LIVE){
+    $("closed-card").hidden=false;
+    $("closed-sub").textContent=(BAND&&BAND.note)?BAND.note
+      :"No band is recorded as open.";
+    $("dot").className="dot bad";
+    $("state").textContent="CLOSED — no liquidity deployed";
+    $("stamp").textContent=new Date().toLocaleTimeString();
+    $("err").style.display="none";
+    return;
+  }
+  const [s0,poolL,posL,pf0,pf1,g0,g1,lo0,lo1,up0,up1]=await Promise.all(
+    ["SLOT0","POOL_L","POS_L","POS_FG0","POS_FG1","FG0","FG1","TLO_FG0","TLO_FG1","THI_FG0","THI_FG1"]
+    .map(k=>slot(S[k])));
+
+  const sqrtPc=Number(s0 & ((1n<<160n)-1n))/2**96;
+  let tick=Number((s0>>160n)&((1n<<24n)-1n)); if(tick>=1<<23) tick-=1<<24;
+  const L=posL & ((1n<<128n)-1n), pL=poolL & ((1n<<128n)-1n);
+  const px=1e12/(sqrtPc*sqrtPc);
+
+  const sa=Math.sqrt(Math.pow(1.0001,T_LO)), sb=Math.sqrt(Math.pow(1.0001,T_HI));
+  const scl=Math.min(Math.max(sqrtPc,sa),sb);
+  const a0=Number(L)*(1/scl-1/sb)/1e6, a1=Number(L)*(scl-sa)/1e18;
+  const total=a0+a1*px;
+
+  const ins=(g,lO,uO)=>{const b=tick>=T_LO?lO:(g-lO+M)%M, a=tick<T_HI?uO:(g-uO+M)%M; return (g-b-a+M*2n)%M;};
+  const f0=Number((((ins(g0,lo0,up0)-pf0+M)%M)*L)>>128n)/1e6;
+  const f1=Number((((ins(g1,lo1,up1)-pf1+M)%M)*L)>>128n)/1e18;
+  const fUsd=f0+f1*px;
+
+  // the band runs from the HIGH tick (low price) to the LOW tick (high price)
+  const lo=usdOf(T_HI), hi=usdOf(T_LO);
+  const inRange=tick>T_LO && tick<T_HI;
+  const dn=(px/lo-1)*100, up=(hi/px-1)*100;
+  const frac=Math.max(0,Math.min(1,(px-lo)/(hi-lo)));
+
+  /* CLOSED comes BEFORE in/out of range. "OUT OF RANGE" presupposes a position
+     to be out of range; with L==0 there is nothing in the band at all, and
+     saying "out of range — earning nothing" invites exactly the wrong reading,
+     that an LP exists and has drifted. Check existence first. */
+  const CLOSED = L===0n;
+  $("closed-card").hidden = !CLOSED;
+  if(CLOSED){
+    $("closed-sub").textContent =
+      "Band shown: $"+lo.toFixed(6)+" – $"+hi.toFixed(6)+" (ticks "+T_LO+"–"+T_HI+"), "
+      +"closed 2026-10-17. PRIORS is $"+px.toFixed(8)+" now. Banked fees below are real and "
+      +"lifetime; the position, deposit and P&L figures are zero because there is nothing deployed.";
+  }
+
+  /* ── "OUT OF RANGE" MEANS THE OPPOSITE THING FOR A ONE-SIDED BAND ──
+     For a centred band, out-of-range is a failure: it stopped earning and
+     wants a decision. A ONE-SIDED accumulation band is MINTED out of range on
+     purpose -- it sits entirely below spot as a resting bid, 100% USDG, and
+     that is what a limit-buy ladder looks like on chain. This page showed it
+     as "OUT OF RANGE — earning nothing" with a red dot within minutes of the
+     mint, which reads as something broken rather than something working. The
+     band's own structure decides the vocabulary. */
+  const ONESIDED = LIVE && BAND.structure==='one-sided';
+  const RESTING  = ONESIDED && !inRange && tick<=T_LO;   // above the band in $ terms
+  const FILLED   = ONESIDED && !inRange && tick>T_HI;    // fell through the bottom
+  const toEntry  = (hi/px-1)*100;                        // % move needed to enter the band
+
+  const near=Math.min(dn,up);
+  $("dot").className="dot"+(CLOSED?" bad":RESTING?"":FILLED?" warn":!inRange?" bad":near<10?" warn":"");
+  $("state").textContent = CLOSED
+    ? "CLOSED — no liquidity deployed"
+    : RESTING
+    ? "RESTING — waiting for PRIORS to fall "+Math.abs(toEntry).toFixed(1)+"% into the band"
+    : FILLED
+    ? "FULLY FILLED — all PRIORS, accumulation complete"
+    : ONESIDED
+    ? "ACCUMULATING — buying PRIORS as price falls, earning fees"
+    : !inRange
+    ? "OUT OF RANGE — earning nothing"
+    : near<10 ? "In range, but close to the edge" : "In range — earning fees";
+
+  /* For a resting band the two "room to edge" figures are meaningless (it is
+     not in the band, so it has no room inside it). The number that matters is
+     how far price must FALL before accumulation starts. */
+  /* ONE DECIMAL HIDES THE LAST STRETCH. At 0.023% from the edge this printed
+     "0.0% away", which reads as "we are there" while the position is still
+     earning nothing -- and prompted exactly that question. Near the edge the
+     remaining distance is the whole story, so show enough digits to tell 0.02%
+     from 0.0%, and give the tick count, which is the quantity that actually
+     decides whether the position is in range. */
+  const absEntry=Math.abs(toEntry);
+  const entryTxt = absEntry<0.1 ? absEntry.toFixed(3)+"% away"
+                 : absEntry<1   ? absEntry.toFixed(2)+"% away"
+                 : absEntry.toFixed(1)+"% away";
+  const ticksToGo = T_LO-tick;
+  $("r-dn").textContent = RESTING ? entryTxt : inRange ? "-"+dn.toFixed(1)+"%" : "—";
+  $("r-dnp").textContent= RESTING
+    ? (ticksToGo<=10 ? ticksToGo+" tick"+(ticksToGo===1?"":"s")+" from earning" : "until it starts buying")
+    : "to $"+lo.toFixed(6);
+  $("r-up").textContent = RESTING ? "$0.00" : inRange ? "+"+up.toFixed(1)+"%" : "—";
+  $("r-upp").textContent= RESTING ? "PRIORS held — none, by design" : "to $"+hi.toFixed(6);
+
+  $("needle").style.left=(frac*100).toFixed(2)+"%";
+  /* THE RANGE HERO. Shows the two edges and where spot sits between them,
+     so "what is the range" is answerable at a glance rather than by reading a
+     needle position. The state line says which way it has to move to earn —
+     the question that actually follows. */
+  $("rh-lo").textContent="$"+lo.toFixed(6);
+  $("rh-hi").textContent="$"+hi.toFixed(6);
+  $("rh-px").textContent="$"+px.toFixed(6);
+  $("rh-state").textContent = inRange
+    ? (frac*100).toFixed(0)+"% up the band · earning"
+    : (px<lo ? "below · needs +"+((lo/px-1)*100).toFixed(2)+"%"
+             : "above · needs "+((hi/px-1)*100).toFixed(2)+"%");
+  $("t-lo").textContent="$"+lo.toFixed(6);
+  $("t-hi").textContent="$"+hi.toFixed(6);
+  $("here").textContent="PRIORS $"+px.toFixed(8)+(RESTING
+    ? "  ·  above the band, not in it yet"
+    : "  ·  "+(frac*100).toFixed(0)+"% up the band");
+  /* The hatched-edge caption warns about going idle. A resting band is ALREADY
+     idle and is meant to be, so that warning is noise here — replace it with
+     what the band is actually waiting for. */
+  $("caption").textContent = RESTING
+    ? "The band sits entirely below spot. It holds no PRIORS and earns nothing until price falls into it — that is the design, not a fault. It can never sell PRIORS into a rally."
+    : FILLED
+    ? "Price is below the band, so it is fully converted to PRIORS and has stopped earning. Standing rule: this holds; closing it returns spot PRIORS and is your call."
+    : "The hatched fifths are where the position is close to going idle."
+      +(near<20?"  It is in one of them now.":"");
+
+  /* ── P&L ──────────────────────────────────────────────────────────────
+     What was deposited, valued two ways:
+       hold  = those same tokens, never deployed, at today's price
+       total = the position now + fees it has accrued
+     total - hold is the LP's entire contribution, and it decomposes exactly
+     into  fees  +  divergence(= position - hold).  Reporting only
+     total - deployed would mostly report which way PRIORS went.            */
+  const sqrtMint=Math.sqrt(1e12/PX_AT_MINT);
+  const scMint=Math.min(Math.max(sqrtMint,sa),sb);
+  /* dep0/dep1 USED TO BE DERIVED from MINT_L and printed as the deposit. After
+     the split that rendered "$59.61 (342.87 USDG + 28,699 PRIORS)" — a token
+     breakdown an order of magnitude larger than the dollar figure beside it,
+     because the formula describes a FRESH mint of that liquidity, not what was
+     actually put in. Deleted rather than patched: the capital number is the
+     one that is true, and it is explicit. */
+  const depUsd=DEPLOYED_USD;
+  const hold=null;   // no single entry point after staged injections
+  const totalNow=total+fUsd;
+  const pnl=totalNow-depUsd, pnlPct=depUsd?pnl/depUsd*100:0;
+  // totalNow uses UNCOLLECTED fees only: compounded fees are already inside
+  // `total` via the live liquidity read. Adding BANKED_FEES here too
+  // would double-count them, so `edge` is correct as written.
+  const injCash=INJECTIONS.reduce((a,i)=>a+i.usd,0);
+  const injTok=INJECTIONS.reduce((a,i)=>a+i.usd/i.px,0);
+  const holdPriors=injTok*px;          // if every injection had bought PRIORS
+  /* Compare the WHOLE position — including uncollected fees — against the
+     counterfactual. Using `total` alone understated the LP by the fee amount. */
+  const edge=totalNow-holdPriors;
+  const feesLife=fUsd+BANKED_FEES;
+  /* DIVERGENCE IS DERIVED, NOT MEASURED DIRECTLY. It used to be
+     `total - hold`, which was right only while every fee earned was still
+     UNCOLLECTED. After a compound those fees sit inside `total`, so that
+     expression quietly absorbs them and the decomposition stops adding up:
+     it rendered "fees $4.43 - divergence $2.11 = -$2.11". Deriving it from
+     the identity  edge = fees + divergence  is correct in both regimes --
+     verified against the pre-compound numbers, where both forms agree. */
+
+  const hrs=(Date.now()-MINT_TS)/3.6e6;
+
+  $("val").textContent=money(totalNow);
+
+  $("valpnl").textContent=(pnl>=0?"+":"")+money(pnl)+"   ("+(pnl>=0?"+":"")+pnlPct.toFixed(1)+"%)";
+  $("valpnl").className="pnl "+(Math.abs(pnl)<0.01?"flat":pnl>0?"pos":"neg");
+  /* These two captions were written for the centred band and hardcoded its
+     history. "mostly the PRIORS move, not the LP" is false for a resting band
+     that holds no PRIORS, and "half the LP after the 2026-10-17 split"
+     describes a position that was closed. Captions that narrate a specific
+     past position have to come from the band record, or they outlive it. */
+  $("valdelta").textContent = RESTING
+    ? "on "+money(depUsd)+" deployed  ·  all USDG, so price moves do not change it"
+    : ONESIDED
+    ? "on "+money(depUsd)+" deployed  ·  converting to PRIORS as price falls"
+    : (LIVE && BAND.structure==='sell-ladder')
+    ? "on "+money(depUsd)+" deployed  ·  selling PRIORS into USDG as price rises"
+    : "on "+money(depUsd)+" deployed  ·  mostly the PRIORS move, not the LP";
+  $("p-dep2").textContent = money(depUsd)+(LIVE&&BAND.structure==='one-sided'
+    ? "  (one-sided band, 100% USDG at open)" : "");
+
+  // "flat" below one cent: at this age the edge is noise, and colouring noise
+  // green would read as a result.
+    /* LEAD WITH THE NUMBER THAT MOVES. This tile used to show LIFETIME fees,
+     which barely changes across a compound ($4.45 -> $4.53) because a
+     compound MOVES fees from uncollected into liquidity rather than adding
+     any. It read as a frozen display. The live figure -- fees accrued since
+     the last compound -- resets to ~0 and visibly rebuilds, which is what
+     tells you the compound actually happened. */
+  /* ONE profit figure, shared. The Position card computed totalNow-depUsd
+     (fees included) while this computed total-injCash (fees excluded), so the
+     page showed +$0.48 and +$0.41 for the same thing and the gap looked like
+     a fee number. Uncollected fees are earned income; they count. */
+  const profit=pnl;
+
+  /* ── THE DECOMPOSITION ───────────────────────────────────────────────
+     holdSame = the EXACT tokens put in at mint, never deployed, at today's
+     price. Then:
+         priceEffect = holdSame - deployed      (PRIORS moved; not the LP)
+         lpAdded     = totalNow  - holdSame     (fees minus divergence)
+         priceEffect + lpAdded  ===  profit     (exactly, by construction)
+
+     RECONCILED BEFORE IT IS SHOWN. Deriving the mint composition from MINT_L
+     is only valid for a band minted in ONE transaction -- the same formula
+     previously printed "342.87 USDG + 28,699 PRIORS" on a $59.61 deposit
+     after a staged injection. So it is checked against the recorded deposit
+     and SUPPRESSED if it does not agree within 5%, rather than shown wrong. */
+  const dep0=Number(MINT_L)*(1/scMint-1/sb)/1e6;     // USDG at mint
+  const dep1=Number(MINT_L)*(scMint-sa)/1e18;        // PRIORS at mint
+  const mintCheck=dep0+dep1*PX_AT_MINT;
+  const reconciles = depUsd>0 && MINT_L>0n && Math.abs(mintCheck-depUsd)/depUsd < 0.05;
+  const holdSame = reconciles ? dep0+dep1*px : null;
+  const priceEffect = reconciles ? holdSame-depUsd : null;
+  const lpAdded     = reconciles ? totalNow-holdSame : null;
+
+  if(reconciles){
+    $("p-price").textContent=(priceEffect>=0?"+":"")+money(priceEffect);
+    $("p-price").className="v "+(Math.abs(priceEffect)<0.01?"flat":priceEffect>0?"pos":"neg");
+    $("p-pricesub").textContent=dep1.toFixed(0)+" PRIORS went "
+      +((px/PX_AT_MINT-1)*100).toFixed(1)+"%";
+  } else {
+    $("p-price").textContent="—";
+    $("p-price").className="v flat";
+    $("p-pricesub").textContent="can't split this band's deposit";
+  }
+  $("p-feesbig").textContent=fee$(fUsd)+"  ·  "+money(feesLife)+" lifetime";
+  /* THE FEES HERO. His instruction: "I want a simple way to see the fees
+     accrued for the lp that is open". feesNow is THIS position's uncollected
+     fees; BANKED_FEES is every earlier epoch, injected at deploy from the
+     append-only ledger. They are deliberately NOT added together in the hero —
+     the question asked was about the LP that is open. */
+  $("p-feeshero").textContent = fee$(fUsd);
+  $("p-feeherosub").textContent =
+    "uncollected in this band" +
+    (BANKED_FEES>0 ? "  ·  "+money(feesLife)+" lifetime across all bands" : "");
+  /* The LP's OWN contribution. `edge` (vs having bought all PRIORS) answered a
+     question he never asked and read as a loss whenever PRIORS outran the
+     band. This is the one that says whether the position is worth having. */
+  const lpShow = reconciles ? lpAdded : edge;
+  $("p-edge").textContent=(lpShow>=0?"+":"")+money(lpShow);
+  $("p-edge").className="v "+(Math.abs(lpShow)<0.01?"flat":lpShow>0?"pos":"neg");
+  $("p-edgesub").textContent = reconciles
+    ? "fees "+fee$(fUsd)+" minus what the band gave up"
+    : "vs buying PRIORS instead — a comparison, not a loss";
+  // spell out the arithmetic so the two numbers can never be mistaken for
+  /* The old decomposition (fees − divergence = edge) died when `hold` became
+     ill-defined across two injections. This now states the two true figures
+     side by side instead of a subtraction that no longer balances. */
+  /* PLAIN ENGLISH, AND THE ARITHMETIC IS VISIBLE. The old line put two numbers
+     of opposite sign next to each other and said "both are true", which is
+     accurate and useless. This says WHERE the money went, and the two parts
+     visibly add to the total so nothing has to be taken on trust. */
+  $("p-parts").textContent = reconciles
+    ? "Of the "+money(depUsd)+" you put in: the PRIORS in it moved "
+      +(priceEffect>=0?"+":"−")+money(Math.abs(priceEffect))
+      +", and the LP added "+(lpAdded>=0?"+":"−")+money(Math.abs(lpAdded))
+      +". That is your "+(profit>=0?"+":"−")+money(Math.abs(profit))+"."
+      +(lpAdded>=0
+        ? "  The LP is beating simply holding those tokens."
+        : "  The LP is behind simply holding those tokens.")
+    : "You are "+(profit>=0?"UP ":"DOWN ")+money(Math.abs(profit))
+      +" on the money you put in. Buying PRIORS outright would have done "
+      +money(Math.abs(edge))+(edge<0?" better":" worse")+" — both are true.";
+  $("p-dep").textContent=money(depUsd);
+  $("p-now").textContent=money(total);
+  $("p-fees").textContent="+"+fee$(fUsd)+"  ·  lifetime "+money(feesLife);
+  if(BANKED_FEES>0){
+   $("p-comp").textContent=money(BANKED_FEES)+"  banked earlier, across compounds/rolls/adds";
+   $("r-comp").style.display="";
+  } else $("r-comp").style.display="none";
+  $("p-tot").textContent=money(totalNow);
+  $("p-vsdep").textContent=((totalNow-depUsd)>=0?"+":"")+money(totalNow-depUsd);
+  $("p-hold").textContent=money(holdPriors)+"  ("+num(injTok,0)+" PRIORS)";
+  $("p-rate").textContent=hrs>0
+    ? money(fUsd/hrs*24)+"/day  ="+(fUsd/hrs*24/depUsd*100).toFixed(2)+"%/day"
+    : "—";
+  $("p-age").textContent=hrs<48?hrs.toFixed(2)+" h":(hrs/24).toFixed(1)+" days";
+  /* L ABOVE the mint means fees were compounded in — expected, and the
+     deposit baseline is still correct because the deposit did not change.
+     L BELOW the mint means liquidity was REMOVED, and then the baseline
+     really is wrong. The first version warned on any difference and would
+     have screamed "BASELINE STALE" after every normal compound. */
+  $("p-warn").textContent = L<MINT_L
+    ? "LIQUIDITY REMOVED — on-chain liquidity ("+L+") is BELOW the recorded mint ("+MINT_L+"). The deposit baseline no longer matches the position and every P&L figure above is scored against the wrong deposit."
+    : hrs<24
+      ? "Age "+hrs.toFixed(1)+"h. One window, one regime — the fee rate above is what has been observed, not a forecast, and an edge this small is indistinguishable from noise."
+      : "";
+  $("holds").textContent=num(a0,2)+" USDG + "+num(a1,0)+" PRIORS";
+  $("fees").textContent=fee$(fUsd)+"  ("+num(f1,4)+" PRIORS)";
+  /* While RESTING the position earns no share of anything — it is not in
+     range. Printing a bare "0.629%" next to $0.0000 of fees invites the
+     reading that it is earning and the fees are just small. Mark it as the
+     share it WOULD take once price enters. */
+  $("share").textContent = pL>0n
+    ? (Number(L)/Number(pL)*100).toFixed(3)+"%"+(RESTING?"  (once in range)":"")
+    : "—";
+
+  const [sp,ug]=await Promise.all([bal(PRIORS),bal(USDG)]);
+  const spot=Number(sp)/1e18;
+  $("spot").textContent=num(spot,0)+" PRIORS  ("+money(spot*px)+")";
+  $("idle").textContent=num(Number(ug)/1e6,2)+" USDG";
+
+  $("stamp").textContent=new Date().toLocaleTimeString();
+  $("err").style.display="none";
+ }catch(e){
+  $("err").textContent="Could not read the chain: "+(e.message||e);
+  $("err").style.display="block";
+ }
+}
+$("l-mint").href=EXP+"/tx/"+TX_MINT;
+$("l-swap").href=EXP+"/tx/"+TX_SWAP;
+$("l-mod").href=EXP+"/address/"+MODADDR;
+$("l-pool").href="https://app.uniswap.org/explore/pools/robinhood/"+PID;
+load();
+setInterval(load,30000);
+</script>

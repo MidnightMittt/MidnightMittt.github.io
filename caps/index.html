@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Safe Caps</title>
+<style>
+:root{--grn:#4dff9e;--amb:#ffc24d;--red:#ff5d8f;--cyan:#4de3ff;--vio:#c08bff;--mag:#ff6ad5;--ink:#f3e9ff;--bg:#07040f;--mut:#7d6aa3}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:500 15px/1.5 ui-monospace,Menlo,monospace;min-height:100%}
+body::before{content:"";position:fixed;inset:-30%;z-index:-2;
+ background:radial-gradient(38% 30% at 22% 18%,rgba(255,106,213,.42),transparent 60%),
+  radial-gradient(34% 28% at 80% 26%,rgba(77,227,255,.36),transparent 62%),
+  radial-gradient(42% 34% at 62% 82%,rgba(160,110,255,.40),transparent 60%),
+  radial-gradient(36% 30% at 18% 78%,rgba(77,255,158,.28),transparent 62%);
+ filter:blur(34px) saturate(135%);animation:drift 42s ease-in-out infinite alternate}
+@keyframes drift{to{transform:translate3d(2%,-2%,0) scale(1.06)}}
+@media (prefers-reduced-motion:reduce){body::before{animation:none}}
+.w{max-width:620px;margin:0 auto;padding:18px 14px 60px}
+h1{font-size:19px;letter-spacing:.14em;margin:0 0 2px;color:var(--mag)}
+.sub{color:var(--mut);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:16px}
+.card{border:1px solid rgba(190,120,255,.3);border-radius:4px;background:rgba(10,5,22,.72);padding:14px;margin-bottom:12px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:var(--mut);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;padding-bottom:6px;font-weight:600}
+td{padding:4px 0;font-variant-numeric:tabular-nums}
+td.n{text-align:right}
+.tight{color:var(--red)}
+label{display:block;color:var(--mut);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;margin:10px 0 4px}
+select,input{width:100%;background:rgba(0,0,0,.45);border:1px solid rgba(190,120,255,.35);color:var(--ink);
+ border-radius:3px;padding:9px;font:600 16px ui-monospace,Menlo,monospace}
+.row{display:flex;gap:8px}.row>*{flex:1}
+.presets{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.presets button{flex:1;min-width:92px;background:rgba(77,227,255,.1);border:1px solid rgba(77,227,255,.35);
+ color:var(--cyan);border-radius:3px;padding:7px 4px;font:600 12px ui-monospace,Menlo,monospace;cursor:pointer}
+.presets button:hover{background:rgba(77,227,255,.2)}
+#go{width:100%;margin-top:14px;padding:13px;border-radius:3px;border:1px solid var(--grn);
+ background:rgba(77,255,158,.14);color:var(--grn);font:700 15px ui-monospace,Menlo,monospace;cursor:pointer;letter-spacing:.06em}
+#go:disabled{opacity:.4;cursor:not-allowed}
+#msg{margin-top:12px;font-size:12.5px;white-space:pre-wrap;word-break:break-all;line-height:1.6}
+a{color:var(--cyan)}
+.k{color:var(--mut)}
+</style>
+</head>
+<body>
+<div class="w">
+<h1>SAFE // SWAP CAPS</h1>
+<div class="sub">setCaps is onlyOwner &middot; your wallet signs, the agent cannot</div>
+
+<div class="card">
+<table><thead><tr><th>token</th><th class="n">per swap</th><th class="n">daily</th><th class="n">spent today</th></tr></thead>
+<tbody id="caps"><tr><td colspan="4" class="k">reading chain&hellip;</td></tr></tbody></table>
+</div>
+
+<div class="card">
+<label>token</label>
+<select id="tok">
+ <option value="0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168|6|USDG">USDG &mdash; spending / buying</option>
+ <option value="0x18E674231A58c239Dc7DaeDcffE15Ec3A24cff5c|18|HOOKR">HOOKR &mdash; selling to USDG</option>
+ <option value="0xeDBf91223639800BCd5756815CAf908Df3b890bE|18|PRIORS">PRIORS &mdash; selling to USDG</option>
+ <option value="0xdEe52F2ab639b6942B0d0F0565400b93b7a0fbe5|18|HARMONIC">HARMONIC &mdash; selling to USDG</option>
+</select>
+<div class="row">
+ <div><label>per swap</label><input id="per" inputmode="decimal" placeholder="250"></div>
+ <div><label>daily total</label><input id="day" inputmode="decimal" placeholder="500"></div>
+</div>
+<div class="presets">
+ <button data-p="150" data-d="300">150 / 300</button>
+ <button data-p="250" data-d="500">250 / 500</button>
+ <button data-p="500" data-d="1000">500 / 1000</button>
+ <button data-p="0" data-d="0">0 / 0 &mdash; freeze</button>
+</div>
+<button id="go">CONNECT WALLET</button>
+<div id="msg"></div>
+</div>
+</div>
+<script>
+var RPC="https://rpc.mainnet.chain.robinhood.com";
+var MOD="0xa20660ABf6e07D6607d7C3aaDAee6E745EDBBE5E";
+var CHAIN="0x1237";                       // 4663
+var SEL="0xefeec38c";                     // setCaps(address,uint256,uint256)
+var TOKS=[["USDG","0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",6],
+          ["HOOKR","0x18E674231A58c239Dc7DaeDcffE15Ec3A24cff5c",18],
+          ["PRIORS","0xeDBf91223639800BCd5756815CAf908Df3b890bE",18],
+          ["HARMONIC","0xdEe52F2ab639b6942B0d0F0565400b93b7a0fbe5",18]];
+var $=function(i){return document.getElementById(i)};
+function pad(h){h=h.replace(/^0x/,"");return "0".repeat(64-h.length)+h}
+function rpc(m,p){return fetch(RPC,{method:"POST",headers:{"content-type":"application/json"},
+ body:JSON.stringify({jsonrpc:"2.0",id:1,method:m,params:p})}).then(function(r){return r.json()}).then(function(j){
+  if(j.error) throw new Error(j.error.message); return j.result});}
+function call(data){return rpc("eth_call",[{to:MOD,data:data},"latest"])}
+// decimal string -> base-units BigInt, without float rounding
+function units(s,d){
+ s=String(s).trim(); if(!/^\d*\.?\d*$/.test(s)||s==="") throw new Error("not a number");
+ var p=s.split("."), w=p[0]||"0", f=(p[1]||"").slice(0,d);
+ return BigInt(w+f.padEnd(d,"0"));
+}
+function fmt(v,d){var s=v.toString().padStart(d+1,"0");
+ var r=(s.slice(0,s.length-d)+"."+s.slice(s.length-d)).replace(/\.?0+$/,"");
+ return r===""?"0":r;}
+function load(){
+ return Promise.all(TOKS.map(function(t){
+   return Promise.all([
+    call(SIGS.maxPerSwap+pad(t[1])), call(SIGS.dailyCap+pad(t[1])), call(SIGS.dailySpent+pad(t[1]))
+   ]).then(function(r){return {s:t[0],d:t[2],a:BigInt(r[0]),b:BigInt(r[1]),c:BigInt(r[2])}})
+     .catch(function(){return {s:t[0],d:t[2],a:null}});
+ })).then(function(res){
+  $("caps").innerHTML=res.map(function(x){
+   if(x.a===null) return '<tr><td>'+x.s+'</td><td colspan="3" class="k">unreadable</td></tr>';
+   var tight=(x.s==="USDG"&&x.b<=200n*(10n**BigInt(x.d)));
+   return '<tr><td'+(tight?' class="tight"':'')+'>'+x.s+'</td><td class="n">'+fmt(x.a,x.d)
+    +'</td><td class="n">'+fmt(x.b,x.d)+'</td><td class="n k">'+fmt(x.c,x.d)+'</td></tr>';
+  }).join("");
+ });
+}
+// keccak4 selectors, computed from the deployed ABI (not guessed)
+var SIGS={maxPerSwap:"0x795accdf",dailyCap:"0x3e3e7973",dailySpent:"0xffc8ada6"};
+document.querySelectorAll(".presets button").forEach(function(b){
+ b.onclick=function(){$("per").value=b.dataset.p;$("day").value=b.dataset.d;};
+});
+var acct=null;
+$("go").onclick=function(){
+ var m=$("msg");
+ if(!acct){
+  if(!window.ethereum){m.innerHTML='<span style="color:var(--red)">no wallet found &mdash; open this in the MetaMask browser</span>';return}
+  window.ethereum.request({method:"eth_requestAccounts"}).then(function(a){
+   acct=a[0];
+   return window.ethereum.request({method:"wallet_switchEthereumChain",params:[{chainId:CHAIN}]}).catch(function(){});
+  }).then(function(){
+   $("go").textContent="SET CAPS";
+   m.innerHTML='<span class="k">connected '+acct.slice(0,8)+'&hellip;'+acct.slice(-4)+'</span>';
+  }).catch(function(e){m.innerHTML='<span style="color:var(--red)">'+e.message+'</span>'});
+  return;
+ }
+ var t=$("tok").value.split("|"), addr=t[0], dec=+t[1], sym=t[2];
+ var per,day;
+ try{ per=units($("per").value,dec); day=units($("day").value,dec); }
+ catch(e){ m.innerHTML='<span style="color:var(--red)">enter both numbers</span>'; return; }
+ if(day<per){ m.innerHTML='<span style="color:var(--red)">daily must be &ge; per-swap</span>'; return; }
+ var data=SEL+pad(addr)+pad(per.toString(16))+pad(day.toString(16));
+ m.innerHTML='<span class="k">simulating&hellip;</span>';
+ rpc("eth_call",[{from:acct,to:MOD,data:data},"latest"]).then(function(){
+  m.innerHTML='<span style="color:var(--grn)">simulation OK</span> &mdash; confirm in your wallet&hellip;';
+  return window.ethereum.request({method:"eth_sendTransaction",params:[{from:acct,to:MOD,data:data}]});
+ }).then(function(h){
+  m.innerHTML='<span style="color:var(--grn)">SENT</span> '+h+'\n<span class="k">waiting&hellip;</span>';
+  var poll=setInterval(function(){
+   rpc("eth_getTransactionReceipt",[h]).then(function(r){
+    if(!r)return; clearInterval(poll);
+    if(r.status==="0x1"){ m.innerHTML='<span style="color:var(--grn)">DONE</span> '+sym+' caps now '+$("per").value+' / '+$("day").value; load(); }
+    else m.innerHTML='<span style="color:var(--red)">reverted</span> '+h;
+   });
+  },2500);
+ }).catch(function(e){
+  var s=(e&&e.message)||String(e);
+  m.innerHTML='<span style="color:var(--red)">'+s+'</span>'+
+   (/not safe owner/i.test(s)?'\n<span class="k">that wallet is not a Safe owner.</span>':'');
+ });
+};
+load();
+</script>
+</body>
+</html>

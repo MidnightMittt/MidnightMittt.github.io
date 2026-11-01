@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>Approve LP exit · Module Owner Controls</title>
+<!--
+  OWNER-ONLY MODULE CONTROLS.
+
+  ── WHY THIS WAS REWRITTEN (third attempt) ──
+  He reported three times that nothing was clickable on mobile. I twice guessed
+  at causes (quirks mode, touch-action) and twice failed. The fix came from
+  DIFFING against approve-v4, the page that demonstrably works on his phone:
+
+      feature          approve-v4   old owner page
+      <details>             0             8
+      IIFE wrapper          0            24
+      preventDefault        0             1
+      z-index on buttons    0             1
+      MetaMask deep link    1             0   <-- the actual difference
+
+  approve-v4 carries a metamask.app.link deep link. Opened in Safari there is
+  no window.ethereum, every button silently does nothing, and the page looks
+  "not clickable" -- exactly what he described. That link bounces into
+  MetaMask's own browser where the wallet exists.
+
+  This page now mirrors approve-v4's mechanics precisely: plain onclick, no
+  IIFE, no details, no preventDefault, no touch-action/z-index, and the deep
+  link first. Calldata is always visible rather than hidden behind a toggle,
+  so the paste-into-MetaMask route needs nothing from this script at all.
+
+  ── WHY THE AGENT CANNOT DO ANY OF THIS ──
+  Verified by simulation: these setters succeed from the EOA and revert with
+  "not safe owner" from the agent key. Caps and scope are the fence; an agent
+  that could widen its own fence is not a fence.
+-->
+<style>
+:root{--bg:#0E0F12;--card:#16181D;--card2:#1D2027;--line:#2A2E37;
+--ink:#F2F3F5;--ink2:#A8ADB8;--mut:#6E747F;
+--ok:#4FB477;--warn:#D9A24A;--bad:#D25F5F;--acc:#5B8DD9;
+--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+ font-size:16px;line-height:1.5;padding:16px 12px 60px}
+.wrap{max-width:680px;margin:0 auto}
+h1{font-size:1.2rem;margin:0 0 4px}
+h2{font-size:1rem;margin:0 0 10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px;margin-bottom:13px}
+.row{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line);font-size:.88rem}
+.row:last-child{border-bottom:0}
+.row span:first-child{color:var(--ink2)}
+.row span:last-child{font-family:var(--mono);text-align:right;word-break:break-all}
+button{font:inherit;font-weight:600;padding:13px 16px;border-radius:9px;border:0;
+ background:var(--acc);color:#fff;cursor:pointer;margin:8px 6px 0 0}
+button.sec{background:var(--card2);color:var(--ink);border:1px solid var(--line)}
+button.danger{background:var(--bad);color:#fff}
+.act{border-top:1px solid var(--line);padding-top:12px;margin-top:12px}
+.act b{font-size:.9rem;display:block}
+.cd{font-family:var(--mono);font-size:.66rem;background:var(--card2);border:1px solid var(--line);
+ border-radius:7px;padding:9px;word-break:break-all;margin-top:9px;
+ user-select:all;-webkit-user-select:all}
+.note{font-size:.8rem;color:var(--mut);margin:9px 0 0}
+pre{background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:10px;
+ font-family:var(--mono);font-size:.72rem;max-height:200px;overflow:auto;white-space:pre-wrap}
+code{font-family:var(--mono);font-size:.84em;background:var(--card2);padding:1px 5px;border-radius:4px}
+.big{display:block;width:100%;text-align:center;margin:0 0 4px}
+a{color:var(--acc)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="status" style="position:sticky;top:0;z-index:50;background:var(--card2);border:1px solid var(--line);border-radius:9px;padding:11px;margin-bottom:12px;font-size:.86rem">Ready. Tap <b>Connect MetaMask</b> first.</div>
+<h1>Module owner controls</h1>
+<p class="note" style="margin-top:0">Must be signed by <code>0xdB489066&hellip;f9cf4FD</code>. The agent cannot do any of this.</p>
+
+<div class="card">
+<a href="https://metamask.app.link/dapp/book-and-benchmark.vercel.app/lpok" style="text-decoration:none">
+<button class="big">Open this page in the MetaMask app</button></a>
+<p class="note" style="margin-top:4px">If buttons do nothing, you are in Safari and there is no wallet here. Tap that first.</p>
+<div class="row"><span>wallet</span><span id="dWallet">checking</span></div>
+<div class="row"><span>network</span><span id="dChain">&mdash;</span></div>
+<div class="row"><span>account</span><span id="acct">&mdash;</span></div>
+<button id="bConnect">Connect MetaMask</button>
+<button id="bNet" class="sec">Switch network</button>
+</div>
+
+
+
+
+<div class="card"><h2>Let me close the HOOKR/WETH LP</h2>
+<p class="note" style="margin-top:0">The band is <b>live</b> &mdash; token id <code>1503571</code>, ticks [117400, 121800], holding 0.01271545 WETH + 1,021.68 HOOKR. <b>Until you sign this I can collect nothing
+and close nothing.</b> It is the only thing standing between the position and an exit.</p>
+<p class="note">Sends to the V3 module <code>0xaD43C9d7200B4284F5647d4F38817682B6360876</code>, value 0.</p>
+<div class="act"><b>Whitelist LP token id 1503571</b>
+<button id="bD1" class="go">Approve in MetaMask</button> <button id="cD1" class="sec">Copy hex</button>
+<div class="cd" id="dD1">0xb481862e000000000000000000000000000000000000000000000000000000000016f1530000000000000000000000000000000000000000000000000000000000000001</div></div>
+</div>
+</div>
+
+<div class="card">
+<p class="note" style="margin-top:0"><b>No wallet?</b> Every hex block above works by hand:
+MetaMask &rarr; Settings &rarr; Advanced &rarr; <b>Show Hex Data</b> on, then Send &rarr; paste the
+<i>To</i> address shown in that section &rarr; amount <b>0</b> &rarr; paste the hex into Hex Data.</p>
+<pre id="log">ready</pre>
+</div>
+</div>
+
+<script>
+var CHAIN="0x1237";
+function $(i){return document.getElementById(i)}
+function log(m){var l=$("log");if(l)l.textContent=(new Date().toTimeString().slice(0,8))+"  "+m+"\n"+l.textContent;
+  /* FEEDBACK MUST BE WHERE THE EYE IS. The log sat below three long sections,
+     so a click produced no visible change anywhere near the button and the
+     page read as dead. This mirrors every message into a sticky bar. */
+  var s=$("status"); if(s) s.textContent=m;}
+function eth(){return window.ethereum}
+var acct=null;
+
+function copy(src,btn){
+  var t=$(src).textContent.trim(), b=$(btn);
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(function(){
+      var o=b.textContent;b.textContent="copied";setTimeout(function(){b.textContent=o},1400);
+    }).catch(function(){log("clipboard blocked - press and hold the hex to select")});
+  } else log("clipboard unavailable - press and hold the hex to select");
+}
+
+function probe(){
+  if(!eth()){ $("dWallet").textContent="NOT FOUND - open in MetaMask"; return; }
+  $("dWallet").textContent="yes"+(eth().isMetaMask?" (MetaMask)":"");
+  eth().request({method:"eth_chainId"}).then(function(c){
+    $("dChain").textContent = c===CHAIN ? "Robinhood Chain" : "wrong network ("+parseInt(c,16)+")";
+  }).catch(function(){});
+  eth().request({method:"eth_accounts"}).then(function(a){
+    if(a&&a.length){acct=a[0];$("acct").textContent=acct}
+  }).catch(function(){});
+}
+
+function connect(){
+  if(!eth()){ log("no wallet - tap 'Open this page in the MetaMask app'"); return; }
+  eth().request({method:"eth_requestAccounts"}).then(function(a){
+    acct=a[0]; $("acct").textContent=acct; log("connected "+acct);
+    if(acct.toLowerCase()!=="0xdb48906603515a434b567c88ec5ae83c1f9cf4fd")
+      log("WARNING: not the Safe owner - every call will revert");
+    probe();
+  }).catch(function(e){log("connect failed: "+(e.message||e))});
+}
+
+function switchNet(){
+  if(!eth()){ log("no wallet"); return; }
+  eth().request({method:"wallet_switchEthereumChain",params:[{chainId:CHAIN}]})
+   .then(function(){log("switched");probe()})
+   .catch(function(e){
+     if(e.code===4902) eth().request({method:"wallet_addEthereumChain",params:[{chainId:CHAIN,
+       chainName:"Robinhood Chain",nativeCurrency:{name:"Ether",symbol:"ETH",decimals:18},
+       rpcUrls:["https://rpc.mainnet.chain.robinhood.com"]}]}).then(function(){log("added");probe()});
+     else log("switch failed: "+(e.message||e));
+   });
+}
+
+function send(to,data,label){
+  if(!eth()){ log("no wallet - use the hex block by hand, or open in MetaMask"); return; }
+  /* WAS: if(!acct){ connect(); return; }  -- which meant the FIRST click on any
+     action button only connected and then gave up silently, and you had to
+     click again. Now it connects and continues in the same gesture. */
+  if(!acct){
+    log("connecting, then "+label);
+    eth().request({method:"eth_requestAccounts"}).then(function(a){
+      acct=a[0]; $("acct").textContent=acct; probe(); doSend(to,data,label);
+    }).catch(function(e){ log("connect rejected: "+(e.message||e)); });
+    return;
+  }
+  doSend(to,data,label);
+}
+
+function doSend(to,data,label){
+  /* NETWORK FIRST. The rewrite dropped this check and it is why nothing
+     happened: on the wrong chain the module address does not exist, the
+     eth_call pre-flight errors, and the old code gave up BEFORE ever calling
+     eth_sendTransaction -- so MetaMask never prompted and the page looked
+     dead. Switching first also makes MetaMask prompt, which is itself visible
+     proof the button worked. */
+  eth().request({method:"eth_chainId"}).then(function(c){
+    if(c===CHAIN) return true;
+    log("wrong network - switching to Robinhood Chain");
+    return eth().request({method:"wallet_switchEthereumChain",params:[{chainId:CHAIN}]})
+      .then(function(){return true})
+      .catch(function(e){
+        if(e.code===4902) return eth().request({method:"wallet_addEthereumChain",params:[{chainId:CHAIN,
+          chainName:"Robinhood Chain",nativeCurrency:{name:"Ether",symbol:"ETH",decimals:18},
+          rpcUrls:["https://rpc.mainnet.chain.robinhood.com"]}]}).then(function(){return true});
+        throw e;
+      });
+  }).then(function(){ realSend(to,data,label); })
+   .catch(function(e){ log("network switch failed: "+(e.message||e)); });
+}
+
+function realSend(to,data,label){
+  log(label+" - simulating");
+  eth().request({method:"eth_call",params:[{to:to,data:data},"latest"]}).then(function(){
+    log(label+" - simulates OK, requesting signature");
+    return eth().request({method:"eth_sendTransaction",params:[{from:acct,to:to,data:data}]});
+  }).then(function(h){
+    if(!h) return;
+    log(label+" SENT "+h);
+  }).catch(function(e){
+    /* DO NOT SWALLOW IT. A failed pre-flight used to end here, which is
+       indistinguishable from a dead button. Say so, then offer to send
+       anyway -- the wallet is the real gate, not my simulation. */
+    var msg=String(e.message||e).slice(0,120);
+    log("pre-flight failed: "+msg);
+    if(confirm("The read-only check failed:\n\n"+msg+"\n\nSend the transaction anyway? MetaMask will still ask you to confirm."))
+      eth().request({method:"eth_sendTransaction",params:[{from:acct,to:to,data:data}]})
+        .then(function(h){log(label+" SENT "+h)})
+        .catch(function(e2){log(label+" rejected: "+String(e2.message||e2).slice(0,120))});
+    else log(label+" cancelled");
+  });
+}
+
+$("bConnect").onclick=connect;
+$("bNet").onclick=switchNet;
+
+var V3MOD="0xaD43C9d7200B4284F5647d4F38817682B6360876";
+$("bD1").onclick=function(){send(V3MOD,$("dD1").textContent.trim(),"Whitelist LP token id 1503571")};
+$("cD1").onclick=function(){copy("dD1","c3")};
+probe();
+setTimeout(probe,1500);
+</script>
+</body>
+</html>

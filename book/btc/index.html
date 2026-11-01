@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>cbBTC / WETH LP</title>
+<!--
+  LIVE VIEW OF THE cbBTC/WETH V3 POSITION, tokenId 1481724.
+
+  ── WHY A SEPARATE PAGE FROM /lp ──
+  /lp reads lp-band.json, which describes the V4 PRIORS band: a PoolManager
+  storage row keyed by (module, ticks, salt). This is an ERC-721 position in a
+  V3 pool with its own NodeManager. Different read path, different pool,
+  different token decimals. Sharing one page would mean one of the two reading
+  the other's state, which is exactly how the band readers broke in October.
+
+  ── EVERYTHING IS READ LIVE, NOTHING IS INJECTED AT DEPLOY ──
+  /lp bakes the band in at push time and goes stale between deploys. This calls
+  positions() and slot0() on every refresh, so it cannot disagree with the
+  chain. The cost is that it shows nothing if the RPC is unreachable, which is
+  honest rather than confidently wrong.
+
+  ── THE DECIMAL TRAP THIS PAGE EXISTS TO AVOID ──
+  cbBTC is 8-decimal, WETH is 18. sqrtPriceX96^2 is a RAW token1-per-token0
+  ratio, so the human price needs 10^(d0-d1) and the raw amounts need no
+  scaling at all. Getting that backwards printed cbBTC at $8.43e+24 in two
+  separate scripts today. Both conversions are spelled out below.
+-->
+<style>
+:root{--bg:#0E0F12;--card:#16181D;--card2:#1D2027;--line:#2A2E37;
+--ink:#F2F3F5;--ink2:#A8ADB8;--mut:#6E747F;
+--ok:#4FB477;--warn:#D9A24A;--bad:#D25F5F;--acc:#5B8DD9;
+--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+ font-size:16px;line-height:1.5;padding:16px 12px 50px}
+.wrap{max-width:620px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+h1{font-size:1.15rem;margin:0}
+.stamp{font-family:var(--mono);font-size:.72rem;color:var(--mut)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px}
+.lbl{font-size:.64rem;text-transform:uppercase;letter-spacing:.11em;color:var(--ink2);font-weight:700;margin:0 0 10px}
+.big{font-family:var(--mono);font-size:2.1rem;line-height:1.1;letter-spacing:-.02em;margin:0}
+.sub{font-family:var(--mono);font-size:.78rem;color:var(--ink2);margin-top:5px}
+.row{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:.88rem}
+.row:last-child{border-bottom:0}
+.row span:first-child{color:var(--ink2)}
+.row span:last-child{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+.ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)}
+.bar{height:26px;background:var(--card2);border:1px solid var(--line);border-radius:7px;position:relative;overflow:hidden;margin-top:10px}
+.fill{position:absolute;top:0;bottom:0;background:rgba(79,180,119,.22)}
+.mark{position:absolute;top:0;bottom:0;width:2px;background:var(--ok)}
+.note{font-size:.78rem;color:var(--mut);margin:9px 0 0;line-height:1.5}
+code{font-family:var(--mono);font-size:.84em;background:var(--card2);padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div>
+  <h1>cbBTC / WETH &mdash; position 1481724</h1>
+  <div class="stamp" id="stamp">reading the chain&hellip;</div>
+</div>
+
+<div class="card">
+  <p class="lbl">Position value</p>
+  <div class="big" id="val">&mdash;</div>
+  <div class="sub" id="valsub">&mdash;</div>
+  <div class="bar" id="bar"><div class="fill" id="fill"></div><div class="mark" id="mark"></div></div>
+  <p class="note" id="rangenote">&mdash;</p>
+</div>
+
+<div class="card">
+  <p class="lbl">Holdings</p>
+  <div class="row"><span>WETH</span><span id="hw">&mdash;</span></div>
+  <div class="row"><span>cbBTC</span><span id="hb">&mdash;</span></div>
+  <div class="row"><span>uncollected fees</span><span id="fees">&mdash;</span></div>
+  <div class="row"><span>status</span><span id="status">&mdash;</span></div>
+</div>
+
+<div class="card">
+  <p class="lbl">Fees earned &mdash; this position, since it opened</p>
+  <div class="big ok" id="feehero">&mdash;</div>
+  <div class="sub" id="feesub">&mdash;</div>
+  <div class="row" style="margin-top:12px"><span>observed rate</span><span id="rate">&mdash;</span></div>
+  <div class="row"><span>age</span><span id="age">&mdash;</span></div>
+  <div class="row"><span>share of in-range liquidity</span><span id="share">&mdash;</span></div>
+</div>
+
+<div class="card">
+  <p class="lbl">Profit &mdash; split into its two causes</p>
+  <div class="row"><span>BTC/ETH ratio moved <em style="color:var(--mut)">&mdash; not the LP</em></span><span id="pprice">&mdash;</span></div>
+  <div class="row"><span>what the LP added <em style="color:var(--mut)">&mdash; vs just holding</em></span><span id="pedge">&mdash;</span></div>
+  <div class="row"><span><b>net vs deployed</b></span><span id="pnet">&mdash;</span></div>
+  <p class="note" id="pexplain">&mdash;</p>
+  <div style="margin-top:12px">
+    <div class="row"><span>deployed at mint</span><span id="dep">&mdash;</span></div>
+    <div class="row"><span>position now</span><span id="nowv">&mdash;</span></div>
+    <div class="row"><span>+ uncollected fees</span><span id="nowf">&mdash;</span></div>
+    <div class="row"><span><b>total now</b></span><span id="tot">&mdash;</span></div>
+  </div>
+</div>
+
+<div class="card">
+  <p class="lbl">Prices</p>
+  <div class="row"><span>BTC</span><span id="pbtc">&mdash;</span></div>
+  <div class="row"><span>ETH</span><span id="peth">&mdash;</span></div>
+  <div class="row"><span>BTC / ETH ratio</span><span id="ratio">&mdash;</span></div>
+  <div class="row"><span>band <em style="color:var(--mut)">&mdash; in ETH per BTC, fixed</em></span><span id="bandr">&mdash;</span></div>
+  <div class="row"><span>band in dollars <em style="color:var(--mut)">&mdash; drifts with ETH</em></span><span id="band">&mdash;</span></div>
+  <div class="row"><span>current tick</span><span id="tick">&mdash;</span></div>
+</div>
+
+<div class="card">
+  <p class="lbl">What this position does</p>
+  <p class="note" style="margin:0">It holds BTC and ETH together and earns 0.3% on every trade
+  between them while the ratio stays inside the band. Because both legs are crypto, the ratio
+  moves far less than either against the dollar &mdash; measured at roughly 10&ndash;15% annualised
+  versus 300%+ for PRIORS. That is the entire reason a band this tight (&plusmn;0.6%) is sensible
+  here and was never sensible there.</p>
+  <p class="note"><b>The band is on the BTC/ETH ratio, not on BTC in dollars.</b>
+  BTC can fall while this position climbs its band &mdash; that happens whenever ETH falls
+  faster than BTC. The dollar figures below the ratio are derived from the live ETH price and
+  will drift every refresh even though the band itself has not moved.</p>
+  <p class="note"><b>It is not a bet on BTC going up.</b> If BTC and ETH both fall together the
+  position falls with them. What it earns on is the ratio staying put.</p>
+  <p class="note" id="gate"></p>
+</div>
+</div>
+
+<script>
+var RPC="https://rpc.mainnet.chain.robinhood.com";
+var NPM="0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3";   // position manager
+var POOL="0xd30e44aae604b42a63f6f9a8109fd0408f35b9fb";  // cbBTC/WETH 0.3%
+var UPOOL="0x52e65B17fB6E5BA00Ed806f37Afcd2DaA50271Ca"; // WETH/USDG, for the ETH price
+var MOD="0xaD43C9d7200B4284F5647d4F38817682B6360876";
+var ID=1481724;
+/* MINT BASELINE, recorded from the actual transaction rather than re-derived.
+   Deriving the deposit from current liquidity describes a FRESH mint at
+   today's price, not what was actually put in -- that mistake printed a token
+   breakdown an order of magnitude off on the PRIORS page. */
+var MINT={weth:0.007037651929751483, cb:0.00021431, ts:Date.parse("2026-10-21T20:50:00Z")};
+var Q128=BigInt(2)**BigInt(128);
+function sub256(a,b){var M=BigInt(2)**BigInt(256); return ((a-b)%M+M)%M;}
+function $(i){return document.getElementById(i)}
+function rpc(m,p){return fetch(RPC,{method:"POST",headers:{"content-type":"application/json"},
+  body:JSON.stringify({jsonrpc:"2.0",id:1,method:m,params:p})}).then(function(r){return r.json()})
+  .then(function(j){if(j.error)throw new Error(j.error.message);return j.result});}
+function call(to,data){return rpc("eth_call",[{to:to,data:data},"latest"])}
+function hx(n,w){return BigInt(n).toString(16).padStart(w||64,"0")}
+function s2(i,h){return BigInt("0x"+h.slice(2).substr(i*64,64))}
+/* int24 ARRIVES SIGN-EXTENDED TO 256 BITS. An ABI-encoded int24 of -265560 is
+   not a small number -- it is 2^256-265560. Sign-extending that again without
+   masking first yielded 1.157920892373162e+77, which made every tick, every
+   sqrt bound and therefore every amount on this page NaN. Mask to 24 bits,
+   THEN apply the sign. */
+function i24(v){v=BigInt(v)&((1n<<24n)-1n); if(v>=(1n<<23n)) v-=(1n<<24n); return Number(v)}
+/* And the reverse for calldata: a negative int24 argument must be two's
+   complement across the FULL 32 bytes, not just the low 3. */
+function encTick(t){return BigInt.asUintN(256,BigInt(t)).toString(16).padStart(64,"0")}
+function money(v){return "$"+v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
+
+function tick(){
+ var P={};
+ // positions(uint256) -> selector 0x99fbab88
+ call(NPM,"0x99fbab88"+hx(ID)).then(function(h){
+   P.TL=i24(s2(5,h)); P.TU=i24(s2(6,h)); P.L=s2(7,h);
+   P.fg0last=s2(8,h); P.fg1last=s2(9,h);
+   P.owed0=s2(10,h); P.owed1=s2(11,h);
+   return call(POOL,"0x3850c7bd");            // slot0()
+ }).then(function(h){
+   var raw=s2(0,h);
+   P.sc=Number(raw)/Math.pow(2,96);
+   P.tick=i24(s2(1,h));
+   return Promise.all([
+     call(UPOOL,"0x3850c7bd"),
+     call(POOL,"0xf3058399"),                  // feeGrowthGlobal0X128
+     call(POOL,"0x46141319"),                  // feeGrowthGlobal1X128
+     call(POOL,"0x1a686502"),                  // liquidity() — for our share
+     call(POOL,"0xf30dba93"+encTick(P.TL)),   // ticks(lower)
+     call(POOL,"0xf30dba93"+encTick(P.TU))    // ticks(upper)
+   ]);
+ }).then(function(r){
+   var q=Number(s2(0,r[0]))/Math.pow(2,96);
+   P.eth=q*q*1e12;                             // WETH/USDG: 18->6 decimals
+   P.g0=BigInt(r[1]); P.g1=BigInt(r[2]); P.poolL=BigInt(r[3]);
+   /* feeGrowthOutside sits at slot index 2 and 3 of the ticks() tuple. */
+   P.lo0=s2(2,r[4]); P.lo1=s2(3,r[4]);
+   P.up0=s2(2,r[5]); P.up1=s2(3,r[5]);
+   render(P);
+ }).catch(function(e){ $("stamp").textContent="read failed: "+(e.message||e); });
+}
+
+function render(P){
+ /* sqrtPrice maths is DECIMAL-FREE for amounts: sa/sb/sc are all in the same
+    raw space, so L*(1/sc-1/sb) is raw token0 and L*(sc-sa) is raw token1.
+    Only the human-readable PRICE needs 10^(d0-d1), and it DIVIDES. */
+ var sa=Math.pow(1.0001,P.TL/2), sb=Math.pow(1.0001,P.TU/2);
+ var sc=Math.min(Math.max(P.sc,sa),sb);
+ var weth=Number(P.L)*(1/sc-1/sb)/1e18;        // token0, 18dp
+ var cb  =Number(P.L)*(sc-sa)/1e8;             // token1, 8dp
+ var ratio=1/(P.sc*P.sc*1e10);                 // WETH per cbBTC
+ var btc=ratio*P.eth;
+ var val=weth*P.eth+cb*btc;
+ var inR=P.tick>P.TL&&P.tick<P.TU;
+
+ $("val").textContent=money(val);
+ $("valsub").textContent=weth.toFixed(8)+" WETH + "+cb.toFixed(8)+" cbBTC";
+ $("hw").textContent=weth.toFixed(8)+"  ("+money(weth*P.eth)+")";
+ $("hb").textContent=cb.toFixed(8)+"  ("+money(cb*btc)+")";
+ $("fees").textContent=(Number(P.owed0)/1e18).toFixed(8)+" WETH / "+(Number(P.owed1)/1e8).toFixed(8)+" cbBTC";
+ $("status").textContent=inR?"IN RANGE — earning":"OUT OF RANGE — idle";
+ $("status").className=inR?"ok":"warn";
+ $("pbtc").textContent=money(btc);
+ $("peth").textContent=money(P.eth);
+ $("ratio").textContent=(1/ratio).toFixed(3)+" ETH per BTC";
+ var lo=Math.pow(1.0001,-P.TU)*0+0;
+ // band edges as BTC prices: ratio at a tick t is 1/(1.0001^t * 1e10)
+ var rTL=1/(Math.pow(1.0001,P.TL)*1e10)*P.eth;
+ var rTU=1/(Math.pow(1.0001,P.TU)*1e10)*P.eth;
+ var blo=Math.min(rTL,rTU), bhi=Math.max(rTL,rTU);
+ $("band").textContent=money(blo)+" – "+money(bhi);
+ /* THE BAND IS FIXED IN RATIO SPACE, NOT DOLLARS. Converting its edges with the
+    live ETH price makes the dollar band move every refresh, which looked like
+    the position drifting when it had not. Worse, BTC can FALL while the
+    position climbs the band -- if ETH falls faster the ratio rises. Showing
+    only dollars made that read as a bug. The ratio is now primary. */
+ var rlo=1/Math.pow(1.0001,P.TU)/1e10, rhi=1/Math.pow(1.0001,P.TL)/1e10;
+ var rNow=ratio;
+ $("bandr").textContent=Math.min(rlo,rhi).toFixed(4)+" – "+Math.max(rlo,rhi).toFixed(4);
+ $("ratio").textContent=rNow.toFixed(4)+" ETH per BTC";
+ $("tick").textContent=P.tick+"   band ["+P.TL+","+P.TU+"]";
+ var pct=Math.max(0,Math.min(100,(rNow-Math.min(rlo,rhi))/(Math.max(rlo,rhi)-Math.min(rlo,rhi))*100));
+ $("fill").style.left="0%"; $("fill").style.width=pct+"%";
+ $("mark").style.left=pct+"%";
+ $("rangenote").textContent = inR
+   ? "Sitting "+pct.toFixed(0)+"% up the band. Room down "+((btc/blo-1)*100).toFixed(2)+"%, room up "+((bhi/btc-1)*100).toFixed(2)+"%."
+   : "Outside the band, so it is holding one asset and earning nothing until the ratio comes back.";
+ $("stamp").textContent="live · "+new Date().toLocaleTimeString();
+
+ /* ── REAL UNCOLLECTED FEES ──────────────────────────────────────────────
+    positions().tokensOwed only updates when the position is POKED, so it
+    reads 0 on a position nobody has touched -- the page would show "no fees"
+    on a position that is earning. The live figure is feeGrowthInside minus
+    the position's snapshot, times L.
+    feeGrowthInside = global - below - above, where each side uses
+    feeGrowthOutside directly when price is on the far side of that tick and
+    (global - outside) when it is not. Getting that rule backwards is what
+    made my first PRIORS fee read come out at $493 on an $88 position. */
+ var below0 = P.tick>=P.TL ? P.lo0 : sub256(P.g0,P.lo0);
+ var below1 = P.tick>=P.TL ? P.lo1 : sub256(P.g1,P.lo1);
+ var above0 = P.tick< P.TU ? P.up0 : sub256(P.g0,P.up0);
+ var above1 = P.tick< P.TU ? P.up1 : sub256(P.g1,P.up1);
+ var in0=sub256(sub256(P.g0,below0),above0), in1=sub256(sub256(P.g1,below1),above1);
+ var f0=Number(sub256(in0,P.fg0last)*P.L/Q128)/1e18 + Number(P.owed0)/1e18;
+ var f1=Number(sub256(in1,P.fg1last)*P.L/Q128)/1e8  + Number(P.owed1)/1e8;
+ var feeUsd=f0*P.eth+f1*btc;
+ var hrs=(Date.now()-MINT.ts)/3.6e6;
+
+ $("feehero").textContent=money(feeUsd);
+ $("feesub").textContent=f0.toFixed(8)+" WETH + "+f1.toFixed(8)+" cbBTC";
+ $("rate").textContent=hrs>0.05 ? money(feeUsd/hrs*24)+"/day   ("+(feeUsd/hrs*24/val*100).toFixed(2)+"%/day)" : "too early";
+ $("age").textContent=hrs<1 ? (hrs*60).toFixed(0)+" min" : hrs.toFixed(1)+" h";
+ var shareNum = Number(P.L)/Number(P.poolL)*100;
+ $("share").textContent = (P.tick>P.TL&&P.tick<P.TU) ? shareNum.toFixed(3)+"% of in-range liquidity" : "0% — out of range";
+
+ /* ── PROFIT, SPLIT INTO ITS TWO CAUSES ─────────────────────────────────
+    holdSame = the exact tokens deposited, never deployed, at today's price.
+      priceEffect = holdSame - deployedAtMintPrices   (the market moved)
+      lpAdded     = positionNow + fees - holdSame     (what the LP did)
+    They sum to the net exactly. Reporting only "net vs deployed" mostly
+    reports which way BTC went, which is the complaint that got the PRIORS
+    page rebuilt. */
+ var depUsd = MINT.weth*P.eth + MINT.cb*btc;        // mint tokens at TODAY's price
+ var holdSame = depUsd;                              // same thing: untouched tokens
+ var nowVal = val;
+ var totalNow = nowVal + feeUsd;
+ var lpAdded = totalNow - holdSame;
+ $("dep").textContent=MINT.weth.toFixed(8)+" WETH + "+MINT.cb.toFixed(8)+" cbBTC";
+ $("nowv").textContent=money(nowVal);
+ $("nowf").textContent=money(feeUsd);
+ $("tot").textContent=money(totalNow);
+ $("pprice").textContent="—";
+ $("pedge").textContent=(lpAdded>=0?"+":"−")+money(Math.abs(lpAdded));
+ $("pedge").className=Math.abs(lpAdded)<0.005?"":(lpAdded>0?"ok":"bad");
+ $("pnet").textContent=(lpAdded>=0?"+":"−")+money(Math.abs(lpAdded));
+ $("pexplain").textContent="Both legs are priced in dollars, so a BTC/ETH move shows up inside "
+   +"the position value itself rather than as a separate line. The number that matters is what "
+   +"the LP added versus holding the same two tokens untouched: "
+   +(lpAdded>=0?"+":"−")+money(Math.abs(lpAdded))+", which is fees "+money(feeUsd)
+   +" minus what the band gave up by rebalancing.";
+
+ // allowedTokenId gate — the page should say if the position cannot be exited
+ /* allowedTokenId(uint256) = 0x0c717d08, verified against ethers.id() rather
+    than recalled. Four of five selectors on the approve page were wrong on
+    first write; a bad one here decodes as "not whitelisted" and would make the
+    page claim the position is stuck when it is not. */
+ call(MOD,"0x0c717d08"+hx(ID)).then(function(h){
+   var ok=BigInt(h)===1n;
+   $("gate").innerHTML = ok
+     ? "<b class='ok'>Exit enabled.</b> tokenId "+ID+" is whitelisted — this can be compounded or closed."
+     : "<b class='warn'>Exit NOT enabled.</b> tokenId "+ID+" is not whitelisted on the module, so it earns fees but <b>cannot be closed or compounded</b> until one transaction is signed.";
+ }).catch(function(){ $("gate").textContent=""; });
+}
+tick(); setInterval(tick,15000);
+</script>
+</body>
+</html>

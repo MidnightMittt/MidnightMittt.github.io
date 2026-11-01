@@ -1,0 +1,259 @@
+<title>Ethereum Module Approval</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!--
+  BRING UP THE ETHEREUM SAFE MODULE, including cbBTC.
+  Built 2026-10-15 on "Approve cbBTC".
+
+  cbBTC CANNOT BE APPROVED ON ITS OWN. As of now the Ethereum side is a shell:
+  Safe 0xbcbdA8c4 (v1.4.1, owner = his EOA) holds NOTHING, the module
+  0x89E1D2Cd is deployed but NOT enabled, and agent() is the zero address.
+  So the whole stack has to come up before any token whitelist means anything.
+
+  WHO CAN CALL WHAT, read off the source rather than assumed:
+    enableModule  -> a SAFE transaction (execTransaction). The Safe is 1-of-1
+                     owned by his EOA, so a pre-validated signature works:
+                     r = owner address, s = 0, v = 1. No off-chain signing.
+    everything else -> modifier onlyOwner is `safe.isOwner(msg.sender)`, so he
+                     calls the MODULE DIRECTLY from his wallet. Routing these
+                     through the Safe would also work but costs more gas.
+
+  CAPS ARE MANDATORY, NOT OPTIONAL. Line 125 of ScopedExecutorV3.sol is
+  `require(amountIn <= maxPerSwap[tokenIn], "over per-swap cap")`. A token
+  whitelisted with no cap set is whitelisted and untradeable -- exactly what
+  blocked the PRIORS LP for an hour tonight. Every setToken here is paired
+  with a setCaps, and skipping one silently disables that token.
+
+  NOTHING HERE MOVES FUNDS. These calls only configure scope. The module still
+  cannot send to an arbitrary address: there is no transfer entrypoint and no
+  recipient parameter anywhere in it.
+-->
+<style>
+:root{
+  --bg:#f4f6f7; --panel:#fff; --sunk:#eceff1; --line:#d7dde1; --ink:#15191d;
+  --dim:#5d6873; --faint:#8b949e; --accent:#7a4bc4; --ok:#18794e;
+  --warn:#9a6700; --bad:#b32d2d;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#101417; --panel:#181d21; --sunk:#0b0e10; --line:#2a3137; --ink:#e9edf0;
+  --dim:#97a1aa; --faint:#6d777f; --accent:#b08cf0; --ok:#4cc585;
+  --warn:#e0b64b; --bad:#f07070;}}
+:root[data-theme="dark"]{
+  --bg:#101417; --panel:#181d21; --sunk:#0b0e10; --line:#2a3137; --ink:#e9edf0;
+  --dim:#97a1aa; --faint:#6d777f; --accent:#b08cf0; --ok:#4cc585;
+  --warn:#e0b64b; --bad:#f07070;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+  font-size:16px;line-height:1.5;-webkit-text-size-adjust:100%}
+.wrap{max-width:620px;margin:0 auto;padding:22px 16px 64px}
+h1{font-size:1.22rem;margin:0 0 3px;letter-spacing:-.01em}
+.sub{color:var(--dim);font-size:.88rem;margin:0 0 18px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px 15px;margin:0 0 11px}
+.card h2{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);
+  margin:0 0 10px;font-weight:600;display:flex;gap:9px;align-items:center}
+.n{display:inline-flex;width:20px;height:20px;border-radius:50%;background:var(--line);
+  color:var(--ink);align-items:center;justify-content:center;font-size:.68rem;flex:none;letter-spacing:0}
+.card.done{border-color:var(--ok)} .card.done .n{background:var(--ok);color:#fff}
+.card.active{border-color:var(--accent)} .card.active .n{background:var(--accent);color:#fff}
+.row{display:flex;justify-content:space-between;gap:12px;padding:5px 0;
+  border-bottom:1px solid var(--line);font-size:.9rem}
+.row:last-child{border-bottom:0}
+.row span:first-child{color:var(--dim)}
+.row span:last-child{font-family:var(--mono);text-align:right;word-break:break-all}
+button{font-family:var(--sans);font-size:.95rem;font-weight:600;width:100%;
+  padding:11px 13px;border-radius:8px;border:1px solid var(--accent);
+  background:var(--accent);color:#fff;cursor:pointer;margin-top:9px}
+button.ghost{background:transparent;color:var(--ink);border-color:var(--line);font-weight:500}
+button:disabled{opacity:.42;cursor:default}
+button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.msg{font-size:.85rem;margin-top:9px;padding:8px 10px;border-radius:6px;
+  border:1px solid var(--line);background:var(--sunk);white-space:pre-wrap;word-break:break-word}
+.msg.ok{border-color:var(--ok);color:var(--ok)}
+.msg.bad{border-color:var(--bad);color:var(--bad)}
+.msg.wait{border-color:var(--warn);color:var(--warn)}
+.note{font-size:.8rem;color:var(--faint);margin:9px 0 0}
+.hide{display:none}
+.banner{background:var(--sunk);border:1px solid var(--warn);border-radius:9px;
+  padding:11px 13px;margin:0 0 14px;font-size:.87rem;color:var(--ink)}
+.banner b{color:var(--warn)}
+h3{font-size:.76rem;text-transform:uppercase;letter-spacing:.09em;color:var(--faint);
+  margin:20px 0 9px;font-weight:600}
+</style>
+
+<div class="wrap">
+<h1>Ethereum module — cbBTC</h1>
+<p class="sub">Safe <span style="font-family:var(--mono);font-size:.82rem">0xbcbdA8c4…0582</span> · module <span style="font-family:var(--mono);font-size:.82rem">0x89E1D2Cd…2F30</span></p>
+
+<div class="banner">
+  <b>This configures scope only — it moves no funds.</b> The module has no transfer entrypoint and no recipient parameter; it can only swap inside the Safe. It is also useless until the Safe actually <i>holds</i> something — today it holds nothing, and your SEND is in your own wallet.
+</div>
+
+<div class="card" id="c0">
+  <h2><span class="n">·</span> Wallet</h2>
+  <div id="w-state" class="msg wait">Looking for MetaMask…</div>
+  <button id="b-connect" class="hide">Connect</button>
+  <div id="w-info" class="hide">
+    <div class="row"><span>account</span><span id="w-acct"></span></div>
+    <div class="row"><span>network</span><span id="w-chain"></span></div>
+  </div>
+</div>
+
+<div class="card" id="cstate">
+  <h2><span class="n">?</span> Current on-chain state</h2>
+  <div class="row"><span>module enabled</span><span id="s-mod">—</span></div>
+  <div class="row"><span>agent set</span><span id="s-agent">—</span></div>
+  <div class="row"><span>cbBTC allowed</span><span id="s-cb">—</span></div>
+  <div class="row"><span>cbBTC per-swap cap</span><span id="s-cbcap">—</span></div>
+  <button id="b-refresh" class="ghost">Re-read</button>
+  <p class="note">Read live every load, so a step already done shows as done rather than being re-sent.</p>
+</div>
+
+<h3>Required for cbBTC</h3>
+
+<div class="card" id="c1"><h2><span class="n">1</span> Enable the module</h2>
+  <p class="note" style="margin-top:0">A Safe transaction. 1-of-1, so it self-signs.</p>
+  <button id="b1">Enable module</button><div id="m1" class="msg hide"></div></div>
+
+<div class="card" id="c2"><h2><span class="n">2</span> Set the agent key</h2>
+  <p class="note" style="margin-top:0">0x45e3f0b9…99c4f, expiring 2027-01-11 — the same key and expiry as your Robinhood-chain module.</p>
+  <button id="b2">Set agent</button><div id="m2" class="msg hide"></div></div>
+
+<div class="card" id="c3"><h2><span class="n">3</span> Allow cbBTC</h2>
+  <button id="b3">setToken cbBTC</button><div id="m3" class="msg hide"></div></div>
+
+<div class="card" id="c4"><h2><span class="n">4</span> Cap cbBTC</h2>
+  <p class="note" style="margin-top:0"><b>Not optional.</b> 0 means nothing can trade. 0.01 per swap, 0.02 per day.</p>
+  <button id="b4">setCaps cbBTC</button><div id="m4" class="msg hide"></div></div>
+
+<h3>Optional — the rest of the Ethereum scope</h3>
+<p class="note" style="margin:0 0 10px">You asked for SEND, USDC and ETH earlier. Gas is cheap right now; each pair is two taps.</p>
+
+<div class="card" id="c5"><h2><span class="n">5</span> SEND</h2>
+  <button id="b5" class="ghost">setToken SEND</button>
+  <button id="b6" class="ghost">setCaps SEND · 35,000 / 70,000</button><div id="m5" class="msg hide"></div></div>
+
+<div class="card" id="c6"><h2><span class="n">6</span> USDC</h2>
+  <button id="b7" class="ghost">setToken USDC</button>
+  <button id="b8" class="ghost">setCaps USDC · 500 / 1,000</button><div id="m6" class="msg hide"></div></div>
+
+<div class="card" id="c7"><h2><span class="n">7</span> WETH</h2>
+  <button id="b9" class="ghost">setToken WETH</button>
+  <button id="b10" class="ghost">setCaps WETH · 0.1 / 0.2</button><div id="m7" class="msg hide"></div></div>
+
+<p class="note">After this, the module can swap these tokens <em>inside</em> the Safe and nothing else. To make it useful you would also have to move assets from your wallet into the Safe — that is your transaction and your decision, and nothing here does it for you.</p>
+</div>
+
+<script>
+"use strict";
+const SAFE="0xbcbdA8c40bFa7C573C8CA85b4b3bF810e5090582";
+const MOD ="0x89E1D2Cdf7B61B99ACbC6464b20AA447fA522F30";
+const CBBTC="0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf";
+const ETH_HEX="0x1";
+
+/* Calldata generated off-chain and pasted verbatim. Every blob was produced by
+   ethers encodeFunctionData against the signatures read out of the deployed
+   bytecode, not hand-assembled. */
+const D={
+ enable:"0x6a761202000000000000000000000000bcbda8c40bfa7c573c8ca85b4b3bf810e50905820000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001a00000000000000000000000000000000000000000000000000000000000000024610b592500000000000000000000000089e1d2cdf7b61b99acbc6464b20aa447fa522f30000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000041000000000000000000000000db48906603515a434b567c88ec5ae83c1f9cf4fd00000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000",
+ agent:"0xb845309c00000000000000000000000045e3f0b9e49377904344b3de8eb03786b3099c4f000000000000000000000000000000000000000000000000000000006b45574a",
+ tokCB:"0x3816a292000000000000000000000000cbb7c0000ab88b473b1f5afd9ef808440eed33bf0000000000000000000000000000000000000000000000000000000000000001",
+ capCB:"0xefeec38c000000000000000000000000cbb7c0000ab88b473b1f5afd9ef808440eed33bf00000000000000000000000000000000000000000000000000000000000f424000000000000000000000000000000000000000000000000000000000001e8480",
+ tokSEND:"0x3816a29200000000000000000000000047accd13264d8f954105256faac8376ce6a559990000000000000000000000000000000000000000000000000000000000000001",
+ capSEND:"0xefeec38c00000000000000000000000047accd13264d8f954105256faac8376ce6a559990000000000000000000000000000000000000000000007695a92c20d6fe00000000000000000000000000000000000000000000000000ed2b525841adfc00000",
+ tokUSDC:"0x3816a292000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb480000000000000000000000000000000000000000000000000000000000000001",
+ capUSDC:"0xefeec38c000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48000000000000000000000000000000000000000000000000000000001dcd6500000000000000000000000000000000000000000000000000000000003b9aca00",
+ tokWETH:"0x3816a292000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc20000000000000000000000000000000000000000000000000000000000000001",
+ capWETH:"0xefeec38c000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2000000000000000000000000000000000000000000000000016345785d8a000000000000000000000000000000000000000000000000000002c68af0bb140000"
+};
+
+const $=id=>document.getElementById(id);
+const show=(id,on=true)=>$(id).classList.toggle("hide",!on);
+const setMsg=(id,t,c="")=>{const e=$(id);e.textContent=t;e.className="msg"+(c?" "+c:"");show(id,true);};
+let eth=null,acct=null,chain=null;
+
+/* Four signals, because a single window.ethereum read loses the injection race
+   in the MetaMask in-app browser. That already cost one dead link. */
+function pick(p){ if(eth||!p)return; eth=p; show("b-connect",true);
+  setMsg("w-state","MetaMask found. Tap Connect.","");
+  p.on&&p.on("accountsChanged",()=>location.reload());
+  p.on&&p.on("chainChanged",()=>location.reload()); }
+window.addEventListener("eip6963:announceProvider",e=>pick(e.detail&&e.detail.provider));
+window.dispatchEvent(new Event("eip6963:requestProvider"));
+window.addEventListener("ethereum#initialized",()=>pick(window.ethereum));
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)pick(window.ethereum);});
+pick(window.ethereum);
+let n=0; const hunt=setInterval(()=>{ pick(window.ethereum);
+  if(eth||++n>30){clearInterval(hunt); if(!eth)
+    setMsg("w-state","No wallet found. Open this inside MetaMask: MetaMask → Browser → paste this URL.","bad");}},300);
+
+const call=(to,data)=>eth.request({method:"eth_call",params:[{to,data},"latest"]});
+const pad=a=>a.replace(/^0x/,"").toLowerCase().padStart(64,"0");
+
+async function readState(){
+ try{
+  const en=await call(SAFE,"0x2d9ad53d"+pad(MOD));          // isModuleEnabled
+  const on=BigInt(en)===1n;
+  $("s-mod").textContent=on?"yes ✓":"NO";
+  const ag=await call(MOD,"0xf5ff5c76");                     // agent()
+  const agent="0x"+ag.slice(26);
+  const hasAgent=BigInt(ag)!==0n;
+  $("s-agent").textContent=hasAgent?agent.slice(0,10)+"… ✓":"not set";
+  const al=await call(MOD,"0x756742f8"+pad(CBBTC));          // allowedToken
+  $("s-cb").textContent=BigInt(al)===1n?"yes ✓":"no";
+  const cap=await call(MOD,"0x795accdf"+pad(CBBTC));         // maxPerSwap
+  const c=BigInt(cap);
+  $("s-cbcap").textContent=c===0n?"0 — BLOCKS ALL TRADES":(Number(c)/1e8)+" cbBTC ✓";
+  $("c1").classList.toggle("done",on);
+  $("c2").classList.toggle("done",hasAgent);
+  $("c3").classList.toggle("done",BigInt(al)===1n);
+  $("c4").classList.toggle("done",c>0n);
+  $("c1").classList.toggle("active",!on);
+ }catch(e){ $("s-mod").textContent="read failed: "+(e.message||e); }
+}
+$("b-refresh").onclick=readState;
+
+$("b-connect").onclick=async()=>{
+ try{
+  acct=(await eth.request({method:"eth_requestAccounts"}))[0];
+  chain=await eth.request({method:"eth_chainId"});
+  $("w-acct").textContent=acct.slice(0,6)+"…"+acct.slice(-4);
+  $("w-chain").textContent=chain===ETH_HEX?"Ethereum ✓":"chain "+parseInt(chain,16);
+  show("w-info",true); show("b-connect",false); $("c0").classList.add("done");
+  if(chain!==ETH_HEX){
+   setMsg("w-state","Not on Ethereum. Switching…","wait");
+   try{ await eth.request({method:"wallet_switchEthereumChain",params:[{chainId:ETH_HEX}]}); return location.reload(); }
+   catch(e){ setMsg("w-state","Switch to Ethereum Mainnet, then reload.","bad"); return; }
+  }
+  setMsg("w-state","Connected.","ok");
+  readState();
+ }catch(e){ setMsg("w-state","Connect failed: "+(e.message||e),"bad"); }
+};
+
+async function send(to,data,label,msgId){
+ try{
+  if(!acct) throw new Error("connect first");
+  if(chain!==ETH_HEX) throw new Error("not on Ethereum");
+  setMsg(msgId,"Confirm "+label+" in MetaMask…","wait");
+  const h=await eth.request({method:"eth_sendTransaction",params:[{from:acct,to,data,value:"0x0"}]});
+  setMsg(msgId,"Sent "+h.slice(0,18)+"… waiting for the block.","wait");
+  for(let i=0;i<60;i++){
+   const r=await eth.request({method:"eth_getTransactionReceipt",params:[h]}).catch(()=>null);
+   if(r){ if(BigInt(r.status||"0x0")!==1n) throw new Error(label+" REVERTED — "+h);
+          setMsg(msgId,label+" confirmed.","ok"); readState(); return; }
+   await new Promise(r=>setTimeout(r,3000));
+  }
+  setMsg(msgId,"No receipt after 3 min — check MetaMask before retrying.","wait");
+ }catch(e){ setMsg(msgId,(e.message||String(e)),"bad"); }
+}
+$("b1").onclick=()=>send(SAFE,D.enable,"enableModule","m1");
+$("b2").onclick=()=>send(MOD,D.agent,"setAgent","m2");
+$("b3").onclick=()=>send(MOD,D.tokCB,"setToken cbBTC","m3");
+$("b4").onclick=()=>send(MOD,D.capCB,"setCaps cbBTC","m4");
+$("b5").onclick=()=>send(MOD,D.tokSEND,"setToken SEND","m5");
+$("b6").onclick=()=>send(MOD,D.capSEND,"setCaps SEND","m5");
+$("b7").onclick=()=>send(MOD,D.tokUSDC,"setToken USDC","m6");
+$("b8").onclick=()=>send(MOD,D.capUSDC,"setCaps USDC","m6");
+$("b9").onclick=()=>send(MOD,D.tokWETH,"setToken WETH","m7");
+$("b10").onclick=()=>send(MOD,D.capWETH,"setCaps WETH","m7");
+</script>
