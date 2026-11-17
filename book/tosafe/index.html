@@ -1,58 +1,221 @@
-<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<title>Send USDG to the Safe</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex,nofollow">
-<title>Locked</title>
+<!--
+  ONE JOB: move the USDG sitting in his MetaMask into the Safe, on mobile,
+  without him typing an address.
+
+  ── WHY A DEEP LINK AND NOT A CONNECT BUTTON ──
+  Every page I have built for him that calls window.ethereum has FAILED on his
+  phone, because injected providers only exist inside MetaMask's own in-app
+  browser -- in Safari there is no window.ethereum at all and the button does
+  nothing. relay.link worked precisely because it ships WalletConnect. Rather
+  than take on a wallet-connect dependency for a single ERC20 transfer, this
+  page builds a metamask.app.link deep link: tapping it opens the MetaMask app
+  with the token, chain, recipient and amount ALREADY FILLED IN, and he just
+  confirms. No connection handshake, no library, works from any browser.
+
+  ── THE INJECTED PATH STILL EXISTS ──
+  If he does happen to open this inside MetaMask's browser, window.ethereum is
+  there and the direct button is shown too. Both routes are offered rather than
+  guessing which one he is on.
+
+  ── EVERY NUMBER IS READ LIVE ──
+  The amount is not hardcoded. It is his actual USDG balance read from chain at
+  load, so the link always moves the full amount even if it changed. A
+  hardcoded figure would silently under-send after any further deposit.
+
+  ── WHAT THIS PAGE CANNOT DO ──
+  It holds no key and signs nothing. Every path ends in MetaMask asking HIM to
+  confirm. That is the point: I never sign a transfer out of his wallet.
+-->
 <style>
-html,body{margin:0;height:100%;background:#07040f;color:#f3e9ff;
- font:500 15px/1.5 ui-monospace,Menlo,monospace;display:grid;place-items:center}
-.b{width:min(92vw,340px);text-align:center}
-h1{font-size:15px;letter-spacing:.22em;color:#ff6ad5;margin:0 0 18px;font-weight:700}
-input{width:100%;background:rgba(0,0,0,.5);border:1px solid rgba(190,120,255,.4);
- color:#f3e9ff;border-radius:3px;padding:12px;font:600 17px ui-monospace,Menlo,monospace;text-align:center}
-button{width:100%;margin-top:10px;padding:12px;border-radius:3px;border:1px solid #4dff9e;
- background:rgba(77,255,158,.14);color:#4dff9e;font:700 15px ui-monospace,Menlo,monospace;cursor:pointer}
-#m{margin-top:12px;font-size:12px;color:#ff5d8f;min-height:18px}
-</style></head><body>
-<div class="b">
-<h1>SAFE // LOCKED</h1>
-<input id="p" type="password" autocomplete="current-password" placeholder="password" autofocus>
-<button id="go">UNLOCK</button>
-<div id="m"></div>
+:root{--bg:#f4f6f7;--panel:#fff;--ink:#15191d;--dim:#5d6873;--faint:#6d777f;
+ --line:#d7dde1;--accent:#0f6b5c;--accent-ink:#fff;--bad:#b32d2d;--warn:#9a6700;
+ --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+ --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+ --bg:#0f1317;--panel:#171c21;--ink:#e9edf0;--dim:#97a1aa;--faint:#8b949e;
+ --line:#2a3138;--accent:#4ec3a8;--accent-ink:#06120f;--bad:#f07070;--warn:#e0b64b}}
+:root[data-theme="dark"]{--bg:#0f1317;--panel:#171c21;--ink:#e9edf0;--dim:#97a1aa;
+ --faint:#8b949e;--line:#2a3138;--accent:#4ec3a8;--accent-ink:#06120f;--bad:#f07070;--warn:#e0b64b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+ font-size:16px;line-height:1.5;-webkit-text-size-adjust:100%}
+.wrap{max-width:520px;margin:0 auto;padding:20px 16px 64px;display:flex;flex-direction:column;gap:16px}
+h1{font-size:21px;margin:0 0 2px;letter-spacing:-.2px}
+.sub{color:var(--faint);font-size:13px;font-family:var(--mono)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+.amt{font-family:var(--mono);font-size:40px;font-variant-numeric:tabular-nums;
+ line-height:1.1;margin:4px 0 0;word-break:break-all}
+.lbl{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);
+ font-weight:600;margin:0 0 6px}
+.btn{display:block;width:100%;text-align:center;padding:17px 16px;border-radius:11px;
+ font-size:17px;font-weight:650;text-decoration:none;border:1px solid var(--accent);
+ background:var(--accent);color:var(--accent-ink);margin-top:4px;cursor:pointer;
+ font-family:inherit;-webkit-appearance:none}
+.btn.sec{background:transparent;color:var(--accent)}
+.btn[disabled]{opacity:.45;pointer-events:none}
+.addr{font-family:var(--mono);font-size:13px;word-break:break-all;background:var(--bg);
+ border:1px solid var(--line);border-radius:8px;padding:11px;margin:6px 0 0;
+ -webkit-user-select:all;user-select:all}
+.row{display:flex;justify-content:space-between;gap:12px;padding:7px 0;
+ border-bottom:1px solid var(--line);font-size:14px}
+.row:last-child{border-bottom:0}
+.row span:last-child{font-family:var(--mono);text-align:right;word-break:break-all}
+.note{font-size:13px;color:var(--dim);margin:10px 0 0}
+.err{color:var(--bad);font-size:14px;margin-top:10px;display:none}
+ol{margin:8px 0 0;padding-left:20px;font-size:14px;color:var(--dim)}
+li{margin:6px 0}
+code{font-family:var(--mono);font-size:12.5px}
+.ok{color:var(--accent);font-weight:650}
+</style>
+
+<div class="wrap">
+<div>
+  <h1>Send USDG to the Safe</h1>
+  <div class="sub" id="stamp">reading the chain…</div>
 </div>
+
+<div class="card">
+  <p class="lbl">In your MetaMask, ready to move</p>
+  <div class="amt" id="amt">—</div>
+  <div class="sub" id="amtsub">Robinhood Chain · USDG</div>
+  <a class="btn" id="deep" href="#" rel="noopener">Open in MetaMask &amp; confirm</a>
+  <button class="btn sec" id="inj" style="display:none">Send with the connected wallet</button>
+  <p class="note" id="deepnote">Opens MetaMask with the recipient and amount already filled in.
+  You only press Confirm. Nothing is signed by this page.</p>
+  <div class="err" id="err"></div>
+</div>
+
+<div class="card">
+  <p class="lbl">Going to — your Safe</p>
+  <div class="addr" id="safe">0x4F91BeABF6d64648141032A47Efa662Ed852888c</div>
+  <button class="btn sec" id="copy" style="margin-top:10px">Copy the Safe address</button>
+  <p class="note">Check this matches what MetaMask shows before you confirm. It is a
+  plain token transfer, so the address <em>is</em> in the transaction and your wallet
+  will display it.</p>
+</div>
+
+<div class="card">
+  <p class="lbl">What you are signing</p>
+  <div class="row"><span>token</span><span>USDG · Global Dollar</span></div>
+  <div class="row"><span>contract</span><span id="tok">0x5fc5…d168</span></div>
+  <div class="row"><span>network</span><span>Robinhood Chain · 4663</span></div>
+  <div class="row"><span>from</span><span id="from">0xdB48…f4FD</span></div>
+  <div class="row"><span>to</span><span>0x4F91…888c (Safe)</span></div>
+  <div class="row"><span>amount</span><span id="rawamt">—</span></div>
+</div>
+
+<div class="card">
+  <p class="lbl">If the button does nothing</p>
+  <ol>
+    <li>Open <b>MetaMask</b> directly and pick <b>Robinhood Chain</b>.</li>
+    <li>Tap <b>USDG</b> &rarr; <b>Send</b>.</li>
+    <li>Paste the Safe address (button above copies it).</li>
+    <li>Enter <b id="manual">the amount</b> and confirm.</li>
+  </ol>
+  <p class="note">You need a little ETH on Robinhood Chain for gas — about a cent.
+  Your balance: <span id="gas">—</span></p>
+</div>
+</div>
+
 <script>
-/* EVERYTHING HERE IS SCOPED. document.open() does NOT clear the global scope,
-   so any global this loader declares survives into the decrypted page. A bare
-   a bare var D for the ciphertext collided with the portfolio page's own const D
-   and killed its entire script with "Identifier 'D' has already been declared"
-   — the page unlocked but every panel below the fold rendered empty. */
-(function(){
-var S="GhSYJ5jaaTGaoE2D/zKi6Q==",IV="9Jkv0X0/xiOVY/56",D="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",IT=250000;
-function b2a(b){return Uint8Array.from(atob(b),function(c){return c.charCodeAt(0)})}
-function show(t){document.getElementById("m").textContent=t}
-async function keyFrom(pw){
- var km=await crypto.subtle.importKey("raw",new TextEncoder().encode(pw),{name:"PBKDF2"},false,["deriveKey"]);
- return crypto.subtle.deriveKey({name:"PBKDF2",salt:b2a(S),iterations:IT,hash:"SHA-256"},
-   km,{name:"AES-GCM",length:256},true,["decrypt"]);
+var RPC="https://rpc.mainnet.chain.robinhood.com";
+var USDG="0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
+var EOA="0xdB48906603515A434b567c88EC5ae83C1f9cf4FD";
+var SAFE="0x4F91BeABF6d64648141032A47Efa662Ed852888c";
+var CHAIN=4663;
+var $=function(id){return document.getElementById(id)};
+
+function rpc(method,params){
+  return fetch(RPC,{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({jsonrpc:"2.0",id:1,method:method,params:params})})
+    .then(function(r){return r.json()}).then(function(j){
+      if(j.error) throw new Error(j.error.message||"rpc error");
+      return j.result;});
 }
-async function openWith(key){
- var pt=await crypto.subtle.decrypt({name:"AES-GCM",iv:b2a(IV)},key,b2a(D));
- var html=new TextDecoder().decode(pt);
- // full re-parse so inline scripts actually run
- document.open(); document.write(html); document.close();
+function pad(h){h=h.replace(/^0x/,"");while(h.length<64)h="0"+h;return h}
+/* 6-dp formatting done on the RAW integer string, never via Number().
+   USDG has 6 decimals and a float round-trip can shave the last unit, which
+   would leave dust behind and make the "send everything" button a lie. */
+function fmt6(raw){
+  var s=raw.toString();
+  while(s.length<7) s="0"+s;
+  var w=s.slice(0,-6), f=s.slice(-6).replace(/0+$/,"");
+  return f? w+"."+f : w;
 }
-async function tryPw(pw,remember){
- show("unlocking\u2026");
- try{
-  var key=await keyFrom(pw);
-  await openWith(key);
-  if(remember) try{sessionStorage.setItem("sk",pw)}catch(e){}
- }catch(e){ show("wrong password"); document.getElementById("p").value=""; }
+
+var BAL=null;
+
+function build(){
+  // metamask.app.link deep link: token@chain/transfer?address=..&uint256=..
+  var link="https://metamask.app.link/send/"+USDG+"@"+CHAIN
+          +"/transfer?address="+SAFE+"&uint256="+BAL.toString();
+  $("deep").setAttribute("href",link);
+  $("deep").removeAttribute("disabled");
 }
-document.getElementById("go").onclick=function(){tryPw(document.getElementById("p").value,true)};
-document.getElementById("p").addEventListener("keydown",function(e){if(e.key==="Enter")tryPw(e.target.value,true)});
-// already unlocked this session? go straight in
-(function(){var pw=null;try{pw=sessionStorage.getItem("sk")}catch(e){}
- if(pw) tryPw(pw,false);})();
-})();
-</script></body></html>
+
+function load(){
+  var data="0x70a08231"+pad(EOA.toLowerCase());
+  rpc("eth_call",[{to:USDG,data:data},"latest"]).then(function(hex){
+    BAL=BigInt(hex);
+    if(BAL===0n){
+      $("amt").textContent="0 USDG";
+      $("amtsub").textContent="nothing in your wallet to send";
+      $("deep").setAttribute("disabled","");
+      $("deepnote").textContent="Your MetaMask holds no USDG on Robinhood Chain. "
+        +"If you just withdrew, give it a minute and reload.";
+      return;
+    }
+    var pretty=fmt6(BAL);
+    $("amt").textContent=pretty+" USDG";
+    $("rawamt").textContent=BAL.toString()+"  (6 dp)";
+    $("manual").textContent=pretty;
+    build();
+    $("stamp").textContent="balance read "+new Date().toLocaleTimeString();
+  }).catch(function(e){
+    $("err").style.display="block";
+    $("err").textContent="Could not read the chain: "+(e.message||e)
+      +" — the manual steps at the bottom still work.";
+  });
+  rpc("eth_getBalance",[EOA,"latest"]).then(function(h){
+    var wei=BigInt(h), eth=Number(wei)/1e18;
+    $("gas").textContent=eth.toFixed(6)+" ETH";
+    if(eth<0.0000005) $("gas").textContent+="  — that may be too little for gas";
+  }).catch(function(){ $("gas").textContent="unreadable"; });
+  $("tok").textContent=USDG;
+  $("from").textContent=EOA;
+}
+
+$("copy").addEventListener("click",function(){
+  var t=SAFE, b=$("copy");
+  function done(){ b.textContent="Copied ✓"; setTimeout(function(){b.textContent="Copy the Safe address"},1800); }
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(done,function(){prompt("Copy the address:",t)});
+  } else { prompt("Copy the address:",t); }
+});
+
+/* Injected path, only if we are actually inside a wallet browser. */
+if(typeof window!=="undefined" && window.ethereum){
+  $("inj").style.display="block";
+  $("inj").addEventListener("click",function(){
+    var b=$("inj"); b.textContent="Check your wallet…";
+    window.ethereum.request({method:"eth_requestAccounts"}).then(function(accts){
+      var from=accts&&accts[0];
+      if(!from) throw new Error("no account");
+      var data="0xa9059cbb"+pad(SAFE.toLowerCase())+pad(BAL.toString(16));
+      return window.ethereum.request({method:"eth_sendTransaction",
+        params:[{from:from,to:USDG,data:data}]});
+    }).then(function(tx){
+      b.textContent="Sent ✓";
+      $("deepnote").textContent="Sent: "+tx;
+    }).catch(function(e){
+      b.textContent="Send with the connected wallet";
+      $("err").style.display="block";
+      $("err").textContent=(e&&e.message)||"wallet refused";
+    });
+  });
+}
+
+load();
+</script>
