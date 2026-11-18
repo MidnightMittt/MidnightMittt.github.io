@@ -1,58 +1,318 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="en">
+<head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex,nofollow">
-<title>Locked</title>
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>HOOKR / WETH LP</title>
+<!--
+  LIVE VIEW OF THE HOOKR/WETH V3 POSITION, tokenId 1481724.
+
+  ── WHY A SEPARATE PAGE FROM /lp ──
+  /lp reads lp-band.json, which describes the V4 PRIORS band: a PoolManager
+  storage row keyed by (module, ticks, salt). This is an ERC-721 position in a
+  V3 pool with its own NodeManager. Different read path, different pool,
+  different token decimals. Sharing one page would mean one of the two reading
+  the other's state, which is exactly how the band readers broke in October.
+
+  ── EVERYTHING IS READ LIVE, NOTHING IS INJECTED AT DEPLOY ──
+  /lp bakes the band in at push time and goes stale between deploys. This calls
+  positions() and slot0() on every refresh, so it cannot disagree with the
+  chain. The cost is that it shows nothing if the RPC is unreachable, which is
+  honest rather than confidently wrong.
+
+  ── THE DECIMAL TRAP THIS PAGE EXISTS TO AVOID ──
+  HOOKR is 8-decimal, WETH is 18. sqrtPriceX96^2 is a RAW token1-per-token0
+  ratio, so the human price needs 10^(d0-d1) and the raw amounts need no
+  scaling at all. Getting that backwards printed HOOKR at $8.43e+24 in two
+  separate scripts today. Both conversions are spelled out below.
+-->
 <style>
-html,body{margin:0;height:100%;background:#07040f;color:#f3e9ff;
- font:500 15px/1.5 ui-monospace,Menlo,monospace;display:grid;place-items:center}
-.b{width:min(92vw,340px);text-align:center}
-h1{font-size:15px;letter-spacing:.22em;color:#ff6ad5;margin:0 0 18px;font-weight:700}
-input{width:100%;background:rgba(0,0,0,.5);border:1px solid rgba(190,120,255,.4);
- color:#f3e9ff;border-radius:3px;padding:12px;font:600 17px ui-monospace,Menlo,monospace;text-align:center}
-button{width:100%;margin-top:10px;padding:12px;border-radius:3px;border:1px solid #4dff9e;
- background:rgba(77,255,158,.14);color:#4dff9e;font:700 15px ui-monospace,Menlo,monospace;cursor:pointer}
-#m{margin-top:12px;font-size:12px;color:#ff5d8f;min-height:18px}
-</style></head><body>
-<div class="b">
-<h1>SAFE // LOCKED</h1>
-<input id="p" type="password" autocomplete="current-password" placeholder="password" autofocus>
-<button id="go">UNLOCK</button>
-<div id="m"></div>
+:root{--bg:#0E0F12;--card:#16181D;--card2:#1D2027;--line:#2A2E37;
+--ink:#F2F3F5;--ink2:#A8ADB8;--mut:#6E747F;
+--ok:#4FB477;--warn:#D9A24A;--bad:#D25F5F;--acc:#5B8DD9;
+--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+ font-size:16px;line-height:1.5;padding:16px 12px 50px}
+.wrap{max-width:620px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+h1{font-size:1.15rem;margin:0}
+.stamp{font-family:var(--mono);font-size:.72rem;color:var(--mut)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px}
+.lbl{font-size:.64rem;text-transform:uppercase;letter-spacing:.11em;color:var(--ink2);font-weight:700;margin:0 0 10px}
+.big{font-family:var(--mono);font-size:2.1rem;line-height:1.1;letter-spacing:-.02em;margin:0}
+.sub{font-family:var(--mono);font-size:.78rem;color:var(--ink2);margin-top:5px}
+.row{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:.88rem}
+.row:last-child{border-bottom:0}
+.row span:first-child{color:var(--ink2)}
+.row span:last-child{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+.ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)}
+.bar{height:26px;background:var(--card2);border:1px solid var(--line);border-radius:7px;position:relative;overflow:hidden;margin-top:10px}
+.fill{position:absolute;top:0;bottom:0;background:rgba(79,180,119,.22)}
+.mark{position:absolute;top:0;bottom:0;width:2px;background:var(--ok)}
+.note{font-size:.78rem;color:var(--mut);margin:9px 0 0;line-height:1.5}
+code{font-family:var(--mono);font-size:.84em;background:var(--card2);padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div>
+  <h1>HOOKR / WETH &mdash; position 1503571</h1>
+  <div class="stamp" id="stamp">reading the chain&hellip;</div>
 </div>
+
+<div class="card">
+  <p class="lbl">Position value</p>
+  <div class="big" id="val">&mdash;</div>
+  <div class="sub" id="valsub">&mdash;</div>
+  <div class="bar" id="bar"><div class="fill" id="fill"></div><div class="mark" id="mark"></div></div>
+  <p class="note" id="rangenote">&mdash;</p>
+</div>
+
+<div class="card">
+  <p class="lbl">Holdings</p>
+  <div class="row"><span>WETH</span><span id="hw">&mdash;</span></div>
+  <div class="row"><span>HOOKR</span><span id="hb">&mdash;</span></div>
+  <div class="row"><span>uncollected fees</span><span id="fees">&mdash;</span></div>
+  <div class="row"><span>status</span><span id="status">&mdash;</span></div>
+</div>
+
+<div class="card">
+  <p class="lbl">Fees earned &mdash; this position, since it opened</p>
+  <div class="big ok" id="feehero">&mdash;</div>
+  <div class="sub" id="feesub">&mdash;</div>
+  <div class="row" style="margin-top:12px"><span>observed rate</span><span id="rate">&mdash;</span></div>
+  <div class="row"><span>age</span><span id="age">&mdash;</span></div>
+  <div class="row"><span>share of in-range liquidity</span><span id="share">&mdash;</span></div>
+</div>
+
+<div class="card">
+  <p class="lbl">Profit &mdash; split into its two causes</p>
+  <div class="row"><span>HOOKR/ETH ratio moved <em style="color:var(--mut)">&mdash; not the LP</em></span><span id="pprice">&mdash;</span></div>
+  <div class="row"><span>what the LP added <em style="color:var(--mut)">&mdash; vs just holding</em></span><span id="pedge">&mdash;</span></div>
+  <div class="row"><span><b>net vs deployed</b></span><span id="pnet">&mdash;</span></div>
+  <p class="note" id="pexplain">&mdash;</p>
+  <div style="margin-top:12px">
+    <div class="row"><span>deployed at mint</span><span id="dep">&mdash;</span></div>
+    <div class="row"><span>position now</span><span id="nowv">&mdash;</span></div>
+    <div class="row"><span>+ uncollected fees</span><span id="nowf">&mdash;</span></div>
+    <div class="row"><span><b>total now</b></span><span id="tot">&mdash;</span></div>
+  </div>
+</div>
+
+<div class="card">
+  <p class="lbl">Prices</p>
+  <div class="row"><span>HOOKR</span><span id="pbtc">&mdash;</span></div>
+  <div class="row"><span>ETH</span><span id="peth">&mdash;</span></div>
+  <div class="row"><span>HOOKR / ETH ratio</span><span id="ratio">&mdash;</span></div>
+  <div class="row"><span>band <em style="color:var(--mut)">&mdash; in ETH per HOOKR, fixed</em></span><span id="bandr">&mdash;</span></div>
+  <div class="row"><span>band in dollars <em style="color:var(--mut)">&mdash; drifts with ETH</em></span><span id="band">&mdash;</span></div>
+  <div class="row"><span>current tick</span><span id="tick">&mdash;</span></div>
+</div>
+
+<div class="card">
+  <p class="lbl">What this position does</p>
+  <p class="note" style="margin:0">It holds HOOKR and ETH together and earns 0.3% on every trade
+  between them while the ratio stays inside the band. Because both legs are crypto, the ratio
+  moves far less than either against the dollar &mdash; measured at roughly 10&ndash;15% annualised
+  versus 300%+ for PRIORS. That is the entire reason a band this tight (&plusmn;0.6%) is sensible
+  here and was never sensible there.</p>
+  <p class="note"><b>The band is on the HOOKR/ETH ratio, not on HOOKR in dollars.</b>
+  HOOKR can fall while this position climbs its band &mdash; that happens whenever ETH falls
+  faster than HOOKR. The dollar figures below the ratio are derived from the live ETH price and
+  will drift every refresh even though the band itself has not moved.</p>
+  <p class="note"><b>It is not a bet on HOOKR going up.</b> If HOOKR and ETH both fall together the
+  position falls with them. What it earns on is the ratio staying put.</p>
+  <p class="note" id="gate"></p>
+</div>
+</div>
+
 <script>
-/* EVERYTHING HERE IS SCOPED. document.open() does NOT clear the global scope,
-   so any global this loader declares survives into the decrypted page. A bare
-   a bare var D for the ciphertext collided with the portfolio page's own const D
-   and killed its entire script with "Identifier 'D' has already been declared"
-   — the page unlocked but every panel below the fold rendered empty. */
-(function(){
-var S="fLSNG+MZCQYe8cr7indOxA==",IV="ZGiVsvSk1Y4R9uc3",D="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",IT=250000;
-function b2a(b){return Uint8Array.from(atob(b),function(c){return c.charCodeAt(0)})}
-function show(t){document.getElementById("m").textContent=t}
-async function keyFrom(pw){
- var km=await crypto.subtle.importKey("raw",new TextEncoder().encode(pw),{name:"PBKDF2"},false,["deriveKey"]);
- return crypto.subtle.deriveKey({name:"PBKDF2",salt:b2a(S),iterations:IT,hash:"SHA-256"},
-   km,{name:"AES-GCM",length:256},true,["decrypt"]);
+var RPC="https://rpc.mainnet.chain.robinhood.com";
+var NPM="0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3";   // position manager
+var POOL="0x42b19e5e3F28C4148C518444546f102F6ba87aB1";  // HOOKR/WETH 1%
+var UPOOL="0x52e65B17fB6E5BA00Ed806f37Afcd2DaA50271Ca"; // WETH/USDG, for the ETH price
+var MOD="0xaD43C9d7200B4284F5647d4F38817682B6360876";
+var ID=1503571;
+/* MINT BASELINE, recorded from the actual transaction rather than re-derived.
+   Deriving the deposit from current liquidity describes a FRESH mint at
+   today's price, not what was actually put in -- that mistake printed a token
+   breakdown an order of magnitude off on the PRIORS page. */
+var MINT={weth:0.025409554601363207, cb:3243.40, usd:111.99, ts:1793084504000};
+var Q128=BigInt(2)**BigInt(128);
+function sub256(a,b){var M=BigInt(2)**BigInt(256); return ((a-b)%M+M)%M;}
+function $(i){return document.getElementById(i)}
+function rpc(m,p){return fetch(RPC,{method:"POST",headers:{"content-type":"application/json"},
+  body:JSON.stringify({jsonrpc:"2.0",id:1,method:m,params:p})}).then(function(r){return r.json()})
+  .then(function(j){if(j.error)throw new Error(j.error.message);return j.result});}
+function call(to,data){return rpc("eth_call",[{to:to,data:data},"latest"])}
+function hx(n,w){return BigInt(n).toString(16).padStart(w||64,"0")}
+function s2(i,h){return BigInt("0x"+h.slice(2).substr(i*64,64))}
+/* int24 ARRIVES SIGN-EXTENDED TO 256 BITS. An ABI-encoded int24 of -265560 is
+   not a small number -- it is 2^256-265560. Sign-extending that again without
+   masking first yielded 1.157920892373162e+77, which made every tick, every
+   sqrt bound and therefore every amount on this page NaN. Mask to 24 bits,
+   THEN apply the sign. */
+function i24(v){v=BigInt(v)&((1n<<24n)-1n); if(v>=(1n<<23n)) v-=(1n<<24n); return Number(v)}
+/* And the reverse for calldata: a negative int24 argument must be two's
+   complement across the FULL 32 bytes, not just the low 3. */
+function encTick(t){return BigInt.asUintN(256,BigInt(t)).toString(16).padStart(64,"0")}
+function money(v){return "$"+v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
+/* a fee of $0.000012 shown as "$0.00" reads as broken when it is PROOF the
+   band is collecting its exact share of a near-zero-volume night */
+function feeMoney(v){return v>0&&v<0.01 ? "$"+v.toFixed(6) : money(v)}
+
+function tick(){
+ var P={};
+ // positions(uint256) -> selector 0x99fbab88
+ call(NPM,"0x99fbab88"+hx(ID)).then(function(h){
+   P.TL=i24(s2(5,h)); P.TU=i24(s2(6,h)); P.L=s2(7,h);
+   P.fg0last=s2(8,h); P.fg1last=s2(9,h);
+   P.owed0=s2(10,h); P.owed1=s2(11,h);
+   return call(POOL,"0x3850c7bd");            // slot0()
+ }).then(function(h){
+   var raw=s2(0,h);
+   P.sc=Number(raw)/Math.pow(2,96);
+   P.tick=i24(s2(1,h));
+   return Promise.all([
+     call(UPOOL,"0x3850c7bd"),
+     call(POOL,"0xf3058399"),                  // feeGrowthGlobal0X128
+     call(POOL,"0x46141319"),                  // feeGrowthGlobal1X128
+     call(POOL,"0x1a686502"),                  // liquidity() — for our share
+     call(POOL,"0xf30dba93"+encTick(P.TL)),   // ticks(lower)
+     call(POOL,"0xf30dba93"+encTick(P.TU))    // ticks(upper)
+   ]);
+ }).then(function(r){
+   var q=Number(s2(0,r[0]))/Math.pow(2,96);
+   P.eth=q*q*1e12;                             // WETH/USDG: 18->6 decimals
+   P.g0=BigInt(r[1]); P.g1=BigInt(r[2]); P.poolL=BigInt(r[3]);
+   /* feeGrowthOutside sits at slot index 2 and 3 of the ticks() tuple. */
+   P.lo0=s2(2,r[4]); P.lo1=s2(3,r[4]);
+   P.up0=s2(2,r[5]); P.up1=s2(3,r[5]);
+   render(P);
+ }).catch(function(e){ $("stamp").textContent="read failed: "+(e.message||e); });
 }
-async function openWith(key){
- var pt=await crypto.subtle.decrypt({name:"AES-GCM",iv:b2a(IV)},key,b2a(D));
- var html=new TextDecoder().decode(pt);
- // full re-parse so inline scripts actually run
- document.open(); document.write(html); document.close();
+
+function render(P){
+ /* sqrtPrice maths is DECIMAL-FREE for amounts: sa/sb/sc are all in the same
+    raw space, so L*(1/sc-1/sb) is raw token0 and L*(sc-sa) is raw token1.
+    Only the human-readable PRICE needs 10^(d0-d1), and it DIVIDES. */
+ var sa=Math.pow(1.0001,P.TL/2), sb=Math.pow(1.0001,P.TU/2);
+ var sc=Math.min(Math.max(P.sc,sa),sb);
+ var weth=Number(P.L)*(1/sc-1/sb)/1e18;        // token0, 18dp
+ /* BOTH tokens are 18-decimal in this pool, so every 10^(d0-d1) correction
+    the HOOKR page needed is exactly 1 here. The 1e8 and 1e10 constants are
+    GONE rather than left in place — carrying a decimal fix that no longer
+    applies is how a plausible number ends up off by a power of ten. */
+ var cb  =Number(P.L)*(sc-sa)/1e18;            // token1 HOOKR, 18dp
+ var ratio=1/(P.sc*P.sc);                      // WETH per HOOKR
+ var btc=ratio*P.eth;                          // HOOKR in USD
+ var val=weth*P.eth+cb*btc;
+ var inR=P.tick>P.TL&&P.tick<P.TU;
+
+ $("val").textContent=money(val);
+ $("valsub").textContent=weth.toFixed(8)+" WETH + "+cb.toFixed(2)+" HOOKR";
+ $("hw").textContent=weth.toFixed(8)+"  ("+money(weth*P.eth)+")";
+ $("hb").textContent=cb.toFixed(2)+"  ("+money(cb*btc)+")";
+ $("fees").textContent=(Number(P.owed0)/1e18).toFixed(8)+" WETH / "+(Number(P.owed1)/1e18).toFixed(4)+" HOOKR";
+ $("status").textContent=inR?"IN RANGE — earning":"OUT OF RANGE — idle";
+ $("status").className=inR?"ok":"warn";
+ $("pbtc").textContent=money(btc);
+ $("peth").textContent=money(P.eth);
+ 
+ var lo=Math.pow(1.0001,-P.TU)*0+0;
+ // band edges as HOOKR prices: ratio at a tick t is 1/(1.0001^t)
+ var rTL=1/Math.pow(1.0001,P.TL)*P.eth;
+ var rTU=1/Math.pow(1.0001,P.TU)*P.eth;
+ var blo=Math.min(rTL,rTU), bhi=Math.max(rTL,rTU);
+ $("band").textContent=money(blo)+" – "+money(bhi);
+ /* THE BAND IS FIXED IN RATIO SPACE, NOT DOLLARS. Converting its edges with the
+    live ETH price makes the dollar band move every refresh, which looked like
+    the position drifting when it had not. Worse, HOOKR can FALL while the
+    position climbs the band -- if ETH falls faster the ratio rises. Showing
+    only dollars made that read as a bug. The ratio is now primary. */
+ var rlo=1/Math.pow(1.0001,P.TU), rhi=1/Math.pow(1.0001,P.TL);
+ var rNow=ratio;
+ $("bandr").textContent=Math.min(rlo,rhi).toExponential(4)+" – "+Math.max(rlo,rhi).toExponential(4)+" WETH/HOOKR";
+ $("ratio").textContent=rNow.toExponential(4)+" WETH per HOOKR";
+ $("tick").textContent=P.tick+"   band ["+P.TL+","+P.TU+"]";
+ var pct=Math.max(0,Math.min(100,(rNow-Math.min(rlo,rhi))/(Math.max(rlo,rhi)-Math.min(rlo,rhi))*100));
+ $("fill").style.left="0%"; $("fill").style.width=pct+"%";
+ $("mark").style.left=pct+"%";
+ $("rangenote").textContent = inR
+   ? "Sitting "+pct.toFixed(0)+"% up the band. Room down "+((btc/blo-1)*100).toFixed(2)+"%, room up "+((bhi/btc-1)*100).toFixed(2)+"%."
+   : "Outside the band, so it is holding one asset and earning nothing until the ratio comes back.";
+ $("stamp").textContent="live · "+new Date().toLocaleTimeString();
+
+ /* ── REAL UNCOLLECTED FEES ──────────────────────────────────────────────
+    positions().tokensOwed only updates when the position is POKED, so it
+    reads 0 on a position nobody has touched -- the page would show "no fees"
+    on a position that is earning. The live figure is feeGrowthInside minus
+    the position's snapshot, times L.
+    feeGrowthInside = global - below - above, where each side uses
+    feeGrowthOutside directly when price is on the far side of that tick and
+    (global - outside) when it is not. Getting that rule backwards is what
+    made my first PRIORS fee read come out at $493 on an $88 position. */
+ var below0 = P.tick>=P.TL ? P.lo0 : sub256(P.g0,P.lo0);
+ var below1 = P.tick>=P.TL ? P.lo1 : sub256(P.g1,P.lo1);
+ var above0 = P.tick< P.TU ? P.up0 : sub256(P.g0,P.up0);
+ var above1 = P.tick< P.TU ? P.up1 : sub256(P.g1,P.up1);
+ var in0=sub256(sub256(P.g0,below0),above0), in1=sub256(sub256(P.g1,below1),above1);
+ var f0=Number(sub256(in0,P.fg0last)*P.L/Q128)/1e18 + Number(P.owed0)/1e18;
+ /* token1 is HOOKR at 18dp here, not cbBTC at 8dp. This line survived the
+    retarget and would have divided HOOKR fees by 1e8 — understating them by
+    a factor of ten billion, i.e. reporting zero forever. */
+ var f1=Number(sub256(in1,P.fg1last)*P.L/Q128)/1e18 + Number(P.owed1)/1e18;
+ var feeUsd=f0*P.eth+f1*btc;
+ var hrs=(Date.now()-MINT.ts)/3.6e6;
+
+ $("feehero").textContent=feeMoney(feeUsd);
+ $("feesub").textContent=f0.toFixed(8)+" WETH + "+f1.toFixed(8)+" HOOKR";
+ $("rate").textContent=hrs>0.05 ? money(feeUsd/hrs*24)+"/day   ("+(feeUsd/hrs*24/val*100).toFixed(2)+"%/day)" : "too early";
+ $("age").textContent=hrs<1 ? (hrs*60).toFixed(0)+" min" : hrs.toFixed(1)+" h";
+ var shareNum = Number(P.L)/Number(P.poolL)*100;
+ $("share").textContent = (P.tick>P.TL&&P.tick<P.TU) ? shareNum.toFixed(3)+"% of in-range liquidity" : "0% — out of range";
+
+ /* ── PROFIT, SPLIT INTO ITS TWO CAUSES ─────────────────────────────────
+    holdSame = the exact tokens deposited, never deployed, at today's price.
+      priceEffect = holdSame - deployedAtMintPrices   (the market moved)
+      lpAdded     = positionNow + fees - holdSame     (what the LP did)
+    They sum to the net exactly. Reporting only "net vs deployed" mostly
+    reports which way HOOKR went, which is the complaint that got the PRIORS
+    page rebuilt. */
+ var depUsd = MINT.weth*P.eth + MINT.cb*btc;        // mint tokens at TODAY's price
+ var holdSame = depUsd;                              // same thing: untouched tokens
+ var nowVal = val;
+ var totalNow = nowVal + feeUsd;
+ var lpAdded = totalNow - holdSame;
+ $("dep").textContent=MINT.weth.toFixed(8)+" WETH + "+MINT.cb.toFixed(8)+" HOOKR";
+ $("nowv").textContent=money(nowVal);
+ $("nowf").textContent=feeMoney(feeUsd);
+ $("tot").textContent=money(totalNow);
+ $("pprice").textContent="—";
+ $("pedge").textContent=(lpAdded>=0?"+":"−")+money(Math.abs(lpAdded));
+ $("pedge").className=Math.abs(lpAdded)<0.005?"":(lpAdded>0?"ok":"bad");
+ $("pnet").textContent=(lpAdded>=0?"+":"−")+money(Math.abs(lpAdded));
+ $("pexplain").textContent="Both legs are priced in dollars, so a HOOKR/ETH move shows up inside "
+   +"the position value itself rather than as a separate line. The number that matters is what "
+   +"the LP added versus holding the same two tokens untouched: "
+   +(lpAdded>=0?"+":"−")+money(Math.abs(lpAdded))+", which is fees "+money(feeUsd)
+   +" minus what the band gave up by rebalancing.";
+
+ // allowedTokenId gate — the page should say if the position cannot be exited
+ /* allowedTokenId(uint256) = 0x0c717d08, verified against ethers.id() rather
+    than recalled. Four of five selectors on the approve page were wrong on
+    first write; a bad one here decodes as "not whitelisted" and would make the
+    page claim the position is stuck when it is not. */
+ call(MOD,"0x0c717d08"+hx(ID)).then(function(h){
+   var ok=BigInt(h)===1n;
+   $("gate").innerHTML = ok
+     ? "<b class='ok'>Exit enabled.</b> tokenId "+ID+" is whitelisted — this can be compounded or closed."
+     : "<b class='warn'>Exit NOT enabled.</b> tokenId "+ID+" is not whitelisted on the module, so it earns fees but <b>cannot be closed or compounded</b> until one transaction is signed.";
+ }).catch(function(){ $("gate").textContent=""; });
 }
-async function tryPw(pw,remember){
- show("unlocking\u2026");
- try{
-  var key=await keyFrom(pw);
-  await openWith(key);
-  if(remember) try{sessionStorage.setItem("sk",pw)}catch(e){}
- }catch(e){ show("wrong password"); document.getElementById("p").value=""; }
-}
-document.getElementById("go").onclick=function(){tryPw(document.getElementById("p").value,true)};
-document.getElementById("p").addEventListener("keydown",function(e){if(e.key==="Enter")tryPw(e.target.value,true)});
-// already unlocked this session? go straight in
-(function(){var pw=null;try{pw=sessionStorage.getItem("sk")}catch(e){}
- if(pw) tryPw(pw,false);})();
-})();
-</script></body></html>
+tick(); setInterval(tick,15000);
+</script>
+</body>
+</html>
